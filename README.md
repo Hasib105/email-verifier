@@ -26,6 +26,7 @@ A privacy-focused email verification API built with Go and [Fiber](https://gofib
 - **Docker Compose deployment** — one-command setup with Tor sidecar
 - **Swagger API documentation** — interactive API docs at `/swagger/`
 - **Terminal CLI for signup** — create users via command line
+- **React dashboard** — modern frontend for managing verification, SMTP, templates, and webhook settings
 
 ## Project Structure
 
@@ -35,6 +36,7 @@ email-verifier-api/
 │   ├── api/main.go              # API server entrypoint
 │   └── cli/main.go              # CLI tool for user management
 ├── docs/                        # Swagger documentation
+├── web/                         # React 19 + Vite frontend dashboard
 ├── internal/
 │   ├── config/config.go         # Environment-based configuration
 │   ├── handler/verify.go        # HTTP handlers
@@ -116,6 +118,26 @@ Use this API key in the X-API-Key header for all API requests.
 
 ```bash
 docker-compose down
+```
+
+### Frontend Dashboard (React 19)
+
+Run the API first, then start the web dashboard:
+
+```bash
+cd web
+cp .env.example .env
+npm install
+npm run dev
+```
+
+Open: `http://localhost:5173`
+
+Production build:
+
+```bash
+npm run build
+npm run preview
 ```
 
 ### Env + Deploy Helpers

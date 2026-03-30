@@ -1,0 +1,42 @@
+/** @type {import('tailwindcss').Config} */
+export default {
+  darkMode: ['class'],
+  content: ['./index.html', './src/**/*.{ts,tsx}'],
+  theme: {
+    extend: {
+      borderRadius: {
+        lg: '0.5rem',
+        md: 'calc(0.5rem - 2px)',
+        sm: 'calc(0.5rem - 4px)',
+      },
+      colors: {
+        border: '#e5e7eb',
+        input: '#d1d5db',
+        ring: '#111827',
+        background: '#f3f4f6',
+        foreground: '#111827',
+        primary: {
+          DEFAULT: '#111827',
+          foreground: '#ffffff',
+        },
+        secondary: {
+          DEFAULT: '#ffffff',
+          foreground: '#111827',
+        },
+        muted: {
+          DEFAULT: '#f9fafb',
+          foreground: '#6b7280',
+        },
+        card: {
+          DEFAULT: '#ffffff',
+          foreground: '#111827',
+        },
+        destructive: {
+          DEFAULT: '#b91c1c',
+          foreground: '#ffffff',
+        },
+      },
+    },
+  },
+  plugins: [require('tailwindcss-animate')],
+}
