@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"email-verifier-api/internal/repo"
+	"email-verifier-api/internal/store"
 	"fmt"
 	"net"
 	"net/smtp"
@@ -22,7 +23,18 @@ func NewSMTPProbeSender(r *repo.Repository, torSocksAddr string) *SMTPProbeSende
 }
 
 func (s *SMTPProbeSender) SendProbe(ctx context.Context, targetEmail, token string) (string, error) {
-	account, err := s.repo.AcquireSMTPAccountForSend(ctx)
+	return s.SendProbeForUser(ctx, targetEmail, token, "")
+}
+
+func (s *SMTPProbeSender) SendProbeForUser(ctx context.Context, targetEmail, token, userID string) (string, error) {
+	var account *store.SMTPAccount
+	var err error
+
+	if userID != "" {
+		account, err = s.repo.AcquireSMTPAccountForSendByUser(ctx, userID)
+	} else {
+		account, err = s.repo.AcquireSMTPAccountForSend(ctx)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -40,7 +52,14 @@ func (s *SMTPProbeSender) SendProbe(ctx context.Context, targetEmail, token stri
 
 	subject := fmt.Sprintf("Email verification probe %s", token)
 	body := fmt.Sprintf("This is an automated verification probe. Token: %s\nRecipient: %s\n", token, targetEmail)
-	if tmpl, err := s.repo.GetActiveEmailTemplate(ctx); err == nil && tmpl != nil {
+
+	var tmpl *store.EmailTemplate
+	if userID != "" {
+		tmpl, err = s.repo.GetActiveEmailTemplateByUser(ctx, userID)
+	} else {
+		tmpl, err = s.repo.GetActiveEmailTemplate(ctx)
+	}
+	if err == nil && tmpl != nil {
 		subject = renderTemplate(tmpl.SubjectTemplate, token, targetEmail, account.Sender)
 		body = renderTemplate(tmpl.BodyTemplate, token, targetEmail, account.Sender)
 	}

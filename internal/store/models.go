@@ -1,5 +1,25 @@
 package store
 
+type User struct {
+	ID         string `db:"id" json:"id"`
+	Name       string `db:"name" json:"name"`
+	Email      string `db:"email" json:"email"`
+	APIKey     string `db:"api_key" json:"api_key"`
+	WebhookURL string `db:"webhook_url" json:"webhook_url"`
+	Active     bool   `db:"active" json:"active"`
+	CreatedAt  int64  `db:"created_at" json:"created_at"`
+	UpdatedAt  int64  `db:"updated_at" json:"updated_at"`
+}
+
+type UserInput struct {
+	ID         string
+	Name       string
+	Email      string
+	APIKey     string
+	WebhookURL string
+	Active     bool
+}
+
 type VerificationRecord struct {
 	ID            string `db:"id"`
 	Email         string `db:"email"`
@@ -8,6 +28,7 @@ type VerificationRecord struct {
 	Source        string `db:"source"`
 	ProbeToken    string `db:"probe_token"`
 	SMTPAccountID string `db:"smtp_account_id"`
+	UserID        string `db:"user_id"`
 
 	CheckCount int  `db:"check_count"`
 	Finalized  bool `db:"finalized"`
@@ -21,6 +42,7 @@ type VerificationRecord struct {
 
 type SMTPAccount struct {
 	ID          string `db:"id" json:"id"`
+	UserID      string `db:"user_id" json:"user_id"`
 	Host        string `db:"host" json:"host"`
 	Port        int    `db:"port" json:"port"`
 	Username    string `db:"username" json:"username"`
@@ -39,6 +61,7 @@ type SMTPAccount struct {
 
 type SMTPAccountInput struct {
 	ID          string
+	UserID      string
 	Host        string
 	Port        int
 	Username    string
@@ -53,6 +76,7 @@ type SMTPAccountInput struct {
 
 type EmailTemplate struct {
 	ID              string `db:"id" json:"id"`
+	UserID          string `db:"user_id" json:"user_id"`
 	Name            string `db:"name" json:"name"`
 	SubjectTemplate string `db:"subject_template" json:"subject_template"`
 	BodyTemplate    string `db:"body_template" json:"body_template"`
@@ -63,6 +87,7 @@ type EmailTemplate struct {
 
 type EmailTemplateInput struct {
 	ID              string
+	UserID          string
 	Name            string
 	SubjectTemplate string
 	BodyTemplate    string

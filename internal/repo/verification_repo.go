@@ -12,7 +12,7 @@ import (
 
 func (r *Repository) GetByEmail(ctx context.Context, email string) (*store.VerificationRecord, error) {
 	var rec store.VerificationRecord
-	query := `SELECT id, email, status, message, source, probe_token, smtp_account_id, check_count, finalized,
+	query := `SELECT id, email, user_id, status, message, source, probe_token, smtp_account_id, check_count, finalized,
 	first_checked_at, last_checked_at, next_check_at, created_at, updated_at
 	FROM verifications WHERE email = $1`
 
@@ -25,16 +25,31 @@ func (r *Repository) GetByEmail(ctx context.Context, email string) (*store.Verif
 	return &rec, nil
 }
 
+func (r *Repository) GetByEmailAndUser(ctx context.Context, email, userID string) (*store.VerificationRecord, error) {
+	var rec store.VerificationRecord
+	query := `SELECT id, email, user_id, status, message, source, probe_token, smtp_account_id, check_count, finalized,
+	first_checked_at, last_checked_at, next_check_at, created_at, updated_at
+	FROM verifications WHERE email = $1 AND user_id = $2`
+
+	if err := r.db.GetContext(ctx, &rec, query, email, userID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get verification by email and user: %w", err)
+	}
+	return &rec, nil
+}
+
 func (r *Repository) UpsertVerification(ctx context.Context, rec *store.VerificationRecord) error {
 	query := `
 INSERT INTO verifications (
-	id, email, status, message, source, probe_token, smtp_account_id, check_count, finalized,
+	id, email, user_id, status, message, source, probe_token, smtp_account_id, check_count, finalized,
 	first_checked_at, last_checked_at, next_check_at, created_at, updated_at
 ) VALUES (
-	:id, :email, :status, :message, :source, :probe_token, :smtp_account_id, :check_count, :finalized,
+	:id, :email, :user_id, :status, :message, :source, :probe_token, :smtp_account_id, :check_count, :finalized,
 	:first_checked_at, :last_checked_at, :next_check_at, :created_at, :updated_at
 )
-ON CONFLICT(email) DO UPDATE SET
+ON CONFLICT(email, user_id) DO UPDATE SET
 	status = excluded.status,
 	message = excluded.message,
 	source = excluded.source,
@@ -66,7 +81,7 @@ func (r *Repository) ListDueChecks(ctx context.Context, nowUnix int64, limit int
 		limit = 50
 	}
 	records := []store.VerificationRecord{}
-	query := `SELECT id, email, status, message, source, probe_token, smtp_account_id, check_count, finalized,
+	query := `SELECT id, email, user_id, status, message, source, probe_token, smtp_account_id, check_count, finalized,
 	first_checked_at, last_checked_at, next_check_at, created_at, updated_at
 	FROM verifications
 	WHERE finalized = FALSE AND next_check_at > 0 AND next_check_at <= $1

@@ -13,16 +13,17 @@ import (
 
 type WebhookDispatcher interface {
 	Send(ctx context.Context, event string, rec *store.VerificationRecord) error
+	SendWithURL(ctx context.Context, event string, rec *store.VerificationRecord, webhookURL string) error
 }
 
 type HTTPWebhookDispatcher struct {
-	url    string
-	client *http.Client
+	defaultURL string
+	client     *http.Client
 }
 
 func NewHTTPWebhookDispatcher(url string, timeout time.Duration) *HTTPWebhookDispatcher {
 	return &HTTPWebhookDispatcher{
-		url: url,
+		defaultURL: url,
 		client: &http.Client{
 			Timeout: timeout,
 		},
@@ -30,7 +31,15 @@ func NewHTTPWebhookDispatcher(url string, timeout time.Duration) *HTTPWebhookDis
 }
 
 func (d *HTTPWebhookDispatcher) Send(ctx context.Context, event string, rec *store.VerificationRecord) error {
-	if d.url == "" || rec == nil {
+	return d.SendWithURL(ctx, event, rec, "")
+}
+
+func (d *HTTPWebhookDispatcher) SendWithURL(ctx context.Context, event string, rec *store.VerificationRecord, webhookURL string) error {
+	url := webhookURL
+	if url == "" {
+		url = d.defaultURL
+	}
+	if url == "" || rec == nil {
 		return nil
 	}
 
@@ -41,6 +50,7 @@ func (d *HTTPWebhookDispatcher) Send(ctx context.Context, event string, rec *sto
 		"status":      rec.Status,
 		"message":     rec.Message,
 		"source":      rec.Source,
+		"user_id":     rec.UserID,
 		"check_count": rec.CheckCount,
 		"finalized":   rec.Finalized,
 		"checked_at":  rec.LastCheckedAt,
@@ -51,7 +61,7 @@ func (d *HTTPWebhookDispatcher) Send(ctx context.Context, event string, rec *sto
 		return fmt.Errorf("marshal webhook payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create webhook request: %w", err)
 	}

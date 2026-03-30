@@ -4,6 +4,8 @@ A privacy-focused email verification API built with Go and [Fiber](https://gofib
 
 ## Features
 
+- **Multi-tenant user management** — each user gets their own API key and isolated resources
+- **Per-user webhook URLs** — referral/notification callbacks specific to each user
 - **Tor-routed SMTP verification** — all outbound connections go through Tor SOCKS5 proxy
 - **Syntax validation** — rejects malformed email addresses
 - **Disposable domain detection** — flags throwaway email providers
@@ -14,26 +16,32 @@ A privacy-focused email verification API built with Go and [Fiber](https://gofib
 - **Persistent verification cache with sqlx** — stores status/history and returns cached result for repeated requests
 - **PostgreSQL-backed storage** — uses latest PostgreSQL for verifications, events, and SMTP account usage tracking
 - **IMAP bounce detection** — checks your mailbox for DSN/bounce messages matching token/recipient
-- **Webhook notifications** — push status transitions to external systems
-- **SMTP account pool** — attach multiple SMTP accounts, auto-pick least-used account, enforce daily limit per account
+- **Webhook notifications** — push status transitions to external systems (supports per-user URLs)
+- **SMTP account pool** — attach multiple SMTP accounts per user, auto-pick least-used account, enforce daily limit per account
 - **CSV import API** — bulk verify emails from uploaded CSV files
 - **Greylisting detection** — identifies temporary rejections (450/451)
 - **STARTTLS support** — upgrades to TLS when the mail server supports it
-- **API key authentication** — simple header-based auth
+- **API key authentication** — per-user header-based auth
 - **Concurrency control** — limits simultaneous Tor connections
 - **Docker Compose deployment** — one-command setup with Tor sidecar
+- **Swagger API documentation** — interactive API docs at `/swagger/`
+- **Terminal CLI for signup** — create users via command line
 
 ## Project Structure
 
 ```
 email-verifier-api/
-├── cmd/api/main.go              # Application entrypoint
+├── cmd/
+│   ├── api/main.go              # API server entrypoint
+│   └── cli/main.go              # CLI tool for user management
+├── docs/                        # Swagger documentation
 ├── internal/
 │   ├── config/config.go         # Environment-based configuration
-│   ├── handler/verify.go        # HTTP handlers (verify, check-tor)
-│   └── verifier/
-│       ├── smtp.go              # SMTP email verification logic
-│       └── tor_check.go         # Tor connectivity verification
+│   ├── handler/verify.go        # HTTP handlers
+│   ├── repo/                    # Database repositories
+│   ├── service/                 # Business logic services
+│   ├── store/models.go          # Data models
+│   └── verifier/                # SMTP verification logic
 ├── Dockerfile                   # Multi-stage Go build
 ├── tor.Dockerfile               # Alpine-based Tor proxy
 ├── docker-compose.yml           # Full stack orchestration
@@ -64,6 +72,46 @@ This starts three containers:
 
 The API waits for Tor to become healthy before starting.
 
+### Create a User (Terminal Signup)
+
+Build and run the CLI tool to create users:
+
+```bash
+# Build the CLI
+go build -o verifier-cli ./cmd/cli
+
+# Run signup
+./verifier-cli signup
+```
+
+Interactive prompts:
+```
+=== Email Verifier - User Signup ===
+
+Enter your name: John Doe
+Enter your email: john@example.com
+Enter webhook URL (optional, press Enter to skip): https://myapp.com/webhooks/email
+
+=== User Created Successfully! ===
+
+User ID:     a1b2c3d4-e5f6-7890-abcd-ef1234567890
+Name:        John Doe
+Email:       john@example.com
+Webhook URL: https://myapp.com/webhooks/email
+
+=== Your API Key (save this securely!) ===
+
+  evk_abc123def456...
+
+Use this API key in the X-API-Key header for all API requests.
+```
+
+### List Users
+
+```bash
+./verifier-cli list-users
+```
+
 ### Stop
 
 ```bash
@@ -78,6 +126,14 @@ docker-compose down
 
 ```powershell
 pwsh -File ./deploy/set-github-secrets.ps1 -EnvFile ./.env
+```
+
+## API Documentation
+
+Interactive Swagger UI is available at:
+
+```
+http://localhost:3000/swagger/
 ```
 
 ## API Endpoints
@@ -113,6 +169,32 @@ curl http://localhost:3000/check-tor
 }
 ```
 
+### Get Current User
+
+```
+GET /users/me
+X-API-Key: <your-api-key>
+```
+
+```bash
+curl http://localhost:3000/users/me \
+  -H "X-API-Key: evk_your_api_key_here"
+```
+
+### Update Webhook URL
+
+```
+PUT /users/webhook
+Content-Type: application/json
+X-API-Key: <your-api-key>
+```
+
+```json
+{
+  "webhook_url": "https://myapp.com/webhooks/email-verified"
+}
+```
+
 ### Verify Email
 
 ```
@@ -124,7 +206,7 @@ X-API-Key: <your-api-key>
 ```bash
 curl -X POST http://localhost:3000/verify \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: super-secret-key-123" \
+  -H "X-API-Key: evk_your_api_key_here" \
   -d '{"email": "user@example.com"}'
 ```
 
@@ -185,7 +267,7 @@ X-API-Key: <your-api-key>
 
 ```bash
 curl -X POST http://localhost:3000/verify/import-csv \
-  -H "X-API-Key: super-secret-key-123" \
+  -H "X-API-Key: evk_your_api_key_here" \
   -F "file=@emails.csv"
 ```
 
@@ -267,6 +349,33 @@ X-API-Key: <your-api-key>
 }
 ```
 
+## Webhook Notifications
+
+Webhooks are sent to the user's configured webhook URL for these events:
+
+| Event | Description |
+|-------|-------------|
+| `verify.created` | New verification request initiated |
+| `verify.bounced` | Bounce detected during scheduled check |
+| `verify.check.no_bounce` | Scheduled check completed with no bounce |
+| `verify.check.error` | Error during scheduled bounce check |
+
+**Webhook Payload:**
+```json
+{
+  "event": "verify.bounced",
+  "id": "ver-123",
+  "email": "user@example.com",
+  "status": "bounced",
+  "message": "Mail delivery failed",
+  "source": "smtp-probe",
+  "user_id": "user-456",
+  "check_count": 1,
+  "finalized": true,
+  "checked_at": 1711800000
+}
+```
+
 ## Configuration
 
 All settings are configured via environment variables (set in `docker-compose.yml`):
@@ -274,7 +383,6 @@ All settings are configured via environment variables (set in `docker-compose.ym
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `3000` | API listen port |
-| `API_KEY` | `super-secret-key-123` | Authentication key for `/verify` |
 | `TOR_SOCKS_ADDR` | `tor:9050` | Tor SOCKS5 proxy address |
 | `MAX_CONCURRENCY` | `5` | Max simultaneous SMTP connections |
 | `DATABASE_DSN` | *(empty)* | Full PostgreSQL connection string override (optional) |
@@ -284,26 +392,25 @@ All settings are configured via environment variables (set in `docker-compose.ym
 | `DB_PASSWORD` | `postgres` | PostgreSQL password |
 | `DB_NAME` | `verifier` | PostgreSQL database name |
 | `DB_SSLMODE` | `disable` | PostgreSQL SSL mode |
-| `WEBHOOK_URL` | *(empty)* | External webhook endpoint for status updates |
+| `WEBHOOK_URL` | *(empty)* | Default webhook endpoint (per-user URLs take precedence) |
 | `WEBHOOK_TIMEOUT` | `10s` | HTTP timeout for webhook delivery |
 | `CHECK_INTERVAL` | `1m` | Scheduler tick interval |
 | `SECOND_BOUNCE_DELAY` | `6h` | Delay before single bounce recheck |
 
-> **Important:** Change `API_KEY` to a strong secret before deploying to production.
-
 ## How It Works
 
-1. **Syntax check** — validates email format with regex
-2. **Disposable check** — compares domain against a known list
-3. **MX lookup** — resolves the domain's mail exchange records
-4. **SMTP connection via Tor** — connects to the mail server's port 25 through the Tor SOCKS5 proxy
-5. **EHLO + STARTTLS** — negotiates with the mail server, upgrading to TLS if available
-6. **MAIL FROM + RCPT TO** — sends the sender and recipient commands to check if the mailbox exists
-7. **Fallback (if uncertain)** — sends a real SMTP probe email and marks status `pending_bounce_check`
-8. **Background scheduler** — performs one IMAP bounce recheck after 6 hours
-9. **SMTP account selection** — picks active account with lowest `sent_today` under daily limit (default 100)
-10. **Template rendering** — if an active template exists, it is used for subject/body
-11. **Persistence + webhook** — stores status/events with sqlx and notifies external service
+1. **User authentication** — validates API key from header, returns user context
+2. **Syntax check** — validates email format with regex
+3. **Disposable check** — compares domain against a known list
+4. **MX lookup** — resolves the domain's mail exchange records
+5. **SMTP connection via Tor** — connects to the mail server's port 25 through the Tor SOCKS5 proxy
+6. **EHLO + STARTTLS** — negotiates with the mail server, upgrading to TLS if available
+7. **MAIL FROM + RCPT TO** — sends the sender and recipient commands to check if the mailbox exists
+8. **Fallback (if uncertain)** — sends a real SMTP probe email and marks status `pending_bounce_check`
+9. **Background scheduler** — performs one IMAP bounce recheck after 6 hours
+10. **SMTP account selection** — picks active account for user with lowest `sent_today` under daily limit (default 100)
+11. **Template rendering** — if an active template exists for user, it is used for subject/body
+12. **Persistence + webhook** — stores status/events and notifies user's webhook URL
 
 ## Notes
 

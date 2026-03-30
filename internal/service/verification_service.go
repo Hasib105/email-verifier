@@ -79,13 +79,18 @@ func NewEmailVerificationService(
 	}
 }
 
-func (s *EmailVerificationService) VerifyEmail(ctx context.Context, email string) (VerifyResponse, error) {
+func (s *EmailVerificationService) VerifyEmail(ctx context.Context, email string, user *store.User) (VerifyResponse, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	if email == "" {
 		return VerifyResponse{}, fmt.Errorf("email is required")
 	}
 
-	existing, err := s.repo.GetByEmail(ctx, email)
+	userID := ""
+	if user != nil {
+		userID = user.ID
+	}
+
+	existing, err := s.repo.GetByEmailAndUser(ctx, email, userID)
 	if err != nil {
 		return VerifyResponse{}, err
 	}
@@ -98,6 +103,7 @@ func (s *EmailVerificationService) VerifyEmail(ctx context.Context, email string
 	record := &store.VerificationRecord{
 		ID:             uuid.NewString(),
 		Email:          email,
+		UserID:         userID,
 		Status:         directResult.Status,
 		Message:        directResult.Message,
 		Source:         "direct-smtp-check",
@@ -113,7 +119,7 @@ func (s *EmailVerificationService) VerifyEmail(ctx context.Context, email string
 		record.ProbeToken = token
 		record.Source = "smtp-probe"
 
-		accountID, err := s.probeSender.SendProbe(ctx, email, token)
+		accountID, err := s.probeSender.SendProbeForUser(ctx, email, token, userID)
 		if err != nil {
 			record.Status = "error"
 			record.Message = fmt.Sprintf("fallback probe send failed: %v", err)
@@ -136,14 +142,18 @@ func (s *EmailVerificationService) VerifyEmail(ctx context.Context, email string
 		log.Printf("warning: failed to save event: %v", err)
 	}
 
-	if err := s.webhook.Send(ctx, "verify.created", record); err != nil {
+	webhookURL := ""
+	if user != nil && user.WebhookURL != "" {
+		webhookURL = user.WebhookURL
+	}
+	if err := s.webhook.SendWithURL(ctx, "verify.created", record, webhookURL); err != nil {
 		log.Printf("warning: webhook failed: %v", err)
 	}
 
 	return responseFromRecord(record, false), nil
 }
 
-func (s *EmailVerificationService) CreateSMTPAccount(ctx context.Context, req SMTPAccountCreateRequest) (*store.SMTPAccount, error) {
+func (s *EmailVerificationService) CreateSMTPAccount(ctx context.Context, req SMTPAccountCreateRequest, userID string) (*store.SMTPAccount, error) {
 	req.Host = strings.TrimSpace(req.Host)
 	req.Username = strings.TrimSpace(req.Username)
 	req.Sender = strings.TrimSpace(req.Sender)
@@ -171,6 +181,7 @@ func (s *EmailVerificationService) CreateSMTPAccount(ctx context.Context, req SM
 
 	input := store.SMTPAccountInput{
 		ID:          uuid.NewString(),
+		UserID:      userID,
 		Host:        req.Host,
 		Port:        req.Port,
 		Username:    req.Username,
@@ -189,11 +200,14 @@ func (s *EmailVerificationService) CreateSMTPAccount(ctx context.Context, req SM
 	return s.repo.CreateSMTPAccount(ctx, input)
 }
 
-func (s *EmailVerificationService) ListSMTPAccounts(ctx context.Context) ([]store.SMTPAccount, error) {
-	return s.repo.ListSMTPAccounts(ctx)
+func (s *EmailVerificationService) ListSMTPAccounts(ctx context.Context, userID string) ([]store.SMTPAccount, error) {
+	if userID == "" {
+		return s.repo.ListSMTPAccounts(ctx)
+	}
+	return s.repo.ListSMTPAccountsByUser(ctx, userID)
 }
 
-func (s *EmailVerificationService) CreateEmailTemplate(ctx context.Context, req EmailTemplateCreateRequest) (*store.EmailTemplate, error) {
+func (s *EmailVerificationService) CreateEmailTemplate(ctx context.Context, req EmailTemplateCreateRequest, userID string) (*store.EmailTemplate, error) {
 	req.Name = strings.TrimSpace(req.Name)
 	req.SubjectTemplate = strings.TrimSpace(req.SubjectTemplate)
 	req.BodyTemplate = strings.TrimSpace(req.BodyTemplate)
@@ -208,6 +222,7 @@ func (s *EmailVerificationService) CreateEmailTemplate(ctx context.Context, req 
 
 	input := store.EmailTemplateInput{
 		ID:              uuid.NewString(),
+		UserID:          userID,
 		Name:            req.Name,
 		SubjectTemplate: req.SubjectTemplate,
 		BodyTemplate:    req.BodyTemplate,
@@ -217,8 +232,11 @@ func (s *EmailVerificationService) CreateEmailTemplate(ctx context.Context, req 
 	return s.repo.CreateEmailTemplate(ctx, input)
 }
 
-func (s *EmailVerificationService) ListEmailTemplates(ctx context.Context) ([]store.EmailTemplate, error) {
-	return s.repo.ListEmailTemplates(ctx)
+func (s *EmailVerificationService) ListEmailTemplates(ctx context.Context, userID string) ([]store.EmailTemplate, error) {
+	if userID == "" {
+		return s.repo.ListEmailTemplates(ctx)
+	}
+	return s.repo.ListEmailTemplatesByUser(ctx, userID)
 }
 
 func (s *EmailVerificationService) StartScheduler(ctx context.Context) {
@@ -300,7 +318,16 @@ func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store
 	if err := s.repo.AddEvent(ctx, rec.ID, event, rec.Status, rec.Message); err != nil {
 		log.Printf("warning: failed to save event: %v", err)
 	}
-	if err := s.webhook.Send(ctx, event, rec); err != nil {
+
+	// Get user webhook URL if user exists
+	webhookURL := ""
+	if rec.UserID != "" {
+		user, err := s.repo.GetUserByID(ctx, rec.UserID)
+		if err == nil && user != nil && user.WebhookURL != "" {
+			webhookURL = user.WebhookURL
+		}
+	}
+	if err := s.webhook.SendWithURL(ctx, event, rec, webhookURL); err != nil {
 		log.Printf("warning: webhook failed: %v", err)
 	}
 

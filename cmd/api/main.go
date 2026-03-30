@@ -9,11 +9,22 @@ import (
 	"email-verifier-api/internal/verifier"
 	"log"
 
+	_ "email-verifier-api/docs"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/gofiber/swagger"
 )
 
+// @title Email Verifier API
+// @version 1.0
+// @description API for verifying email addresses using SMTP checks and bounce detection
+// @host localhost:3000
+// @BasePath /
+// @securityDefinitions.apikey ApiKeyAuth
+// @in header
+// @name X-API-Key
 func main() {
 	cfg := config.Load()
 
@@ -32,6 +43,8 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	defer verificationRepo.Close()
+
+	userService := service.NewUserService(verificationRepo)
 
 	probeSender := service.NewSMTPProbeSender(verificationRepo, cfg.TorSocksAddr)
 
@@ -62,19 +75,33 @@ func main() {
 	app.Use(recover.New())
 	app.Use(cors.New())
 
-	// Routes
-	app.Post("/verify", handler.VerifyHandler(verificationService, cfg.APIKey))
-	app.Post("/verify/import-csv", handler.ImportCSVHandler(verificationService, cfg.APIKey))
-	app.Post("/smtp-accounts", handler.CreateSMTPAccountHandler(verificationService, cfg.APIKey))
-	app.Get("/smtp-accounts", handler.ListSMTPAccountsHandler(verificationService, cfg.APIKey))
-	app.Post("/email-templates", handler.CreateEmailTemplateHandler(verificationService, cfg.APIKey))
-	app.Get("/email-templates", handler.ListEmailTemplatesHandler(verificationService, cfg.APIKey))
+	// Swagger
+	app.Get("/swagger/*", swagger.HandlerDefault)
+
+	// Health endpoints
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.SendString("OK")
 	})
 	app.Get("/check-tor", handler.CheckTorHandler(verifier))
 
+	// User management (no auth required for these)
+	app.Get("/users/me", handler.GetCurrentUserHandler(userService))
+	app.Put("/users/webhook", handler.UpdateWebhookHandler(userService))
+
+	// Verification routes
+	app.Post("/verify", handler.VerifyHandler(verificationService, userService))
+	app.Post("/verify/import-csv", handler.ImportCSVHandler(verificationService, userService))
+
+	// SMTP account routes
+	app.Post("/smtp-accounts", handler.CreateSMTPAccountHandler(verificationService, userService))
+	app.Get("/smtp-accounts", handler.ListSMTPAccountsHandler(verificationService, userService))
+
+	// Email template routes
+	app.Post("/email-templates", handler.CreateEmailTemplateHandler(verificationService, userService))
+	app.Get("/email-templates", handler.ListEmailTemplatesHandler(verificationService, userService))
+
 	log.Printf("Starting API on port %s with Tor at %s", cfg.Port, cfg.TorSocksAddr)
+	log.Printf("Swagger UI available at http://localhost:%s/swagger/", cfg.Port)
 	if err := app.Listen(":" + cfg.Port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}

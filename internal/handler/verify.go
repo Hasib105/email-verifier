@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"email-verifier-api/internal/service"
+	"email-verifier-api/internal/store"
 	"email-verifier-api/internal/verifier"
 	"encoding/csv"
 	"errors"
@@ -21,18 +22,41 @@ type CSVImportResponse struct {
 	Items    []service.VerifyResponse `json:"items"`
 }
 
-func checkAPIKey(c *fiber.Ctx, apiKey string) error {
-	if c.Get("X-API-Key") != apiKey {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid API Key"})
+// authenticateUser extracts API key from header and returns the user
+func authenticateUser(c *fiber.Ctx, userSvc *service.UserService) (*store.User, error) {
+	apiKey := c.Get("X-API-Key")
+	if apiKey == "" {
+		return nil, errors.New("API key is required")
 	}
-	return nil
+
+	user, err := userSvc.AuthenticateByAPIKey(context.Background(), apiKey)
+	if err != nil {
+		return nil, err
+	}
+	if user == nil {
+		return nil, errors.New("invalid API key")
+	}
+
+	return user, nil
 }
 
-func VerifyHandler(svc *service.EmailVerificationService, apiKey string) fiber.Handler {
+// @Summary Verify an email address
+// @Description Verifies if an email address is deliverable using SMTP checks
+// @Tags verification
+// @Accept json
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Param request body VerifyRequest true "Email to verify"
+// @Success 200 {object} service.VerifyResponse
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /verify [post]
+func VerifyHandler(svc *service.EmailVerificationService, userSvc *service.UserService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		// Simple API Key Auth
-		if err := checkAPIKey(c, apiKey); err != nil {
-			return err
+		user, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
 		}
 
 		var req VerifyRequest
@@ -44,7 +68,7 @@ func VerifyHandler(svc *service.EmailVerificationService, apiKey string) fiber.H
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Email required"})
 		}
 
-		result, err := svc.VerifyEmail(context.Background(), req.Email)
+		result, err := svc.VerifyEmail(context.Background(), req.Email, user)
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 		}
@@ -53,10 +77,22 @@ func VerifyHandler(svc *service.EmailVerificationService, apiKey string) fiber.H
 	}
 }
 
-func ImportCSVHandler(svc *service.EmailVerificationService, apiKey string) fiber.Handler {
+// @Summary Import emails from CSV
+// @Description Imports and verifies multiple emails from a CSV file
+// @Tags verification
+// @Accept multipart/form-data
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Param file formData file true "CSV file with emails"
+// @Success 200 {object} CSVImportResponse
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Router /verify/import-csv [post]
+func ImportCSVHandler(svc *service.EmailVerificationService, userSvc *service.UserService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		if err := checkAPIKey(c, apiKey); err != nil {
-			return err
+		user, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
 		}
 
 		fileHeader, err := c.FormFile("file")
@@ -92,7 +128,7 @@ func ImportCSVHandler(svc *service.EmailVerificationService, apiKey string) fibe
 
 			total++
 			email := record[0]
-			res, err := svc.VerifyEmail(context.Background(), email)
+			res, err := svc.VerifyEmail(context.Background(), email, user)
 			if err != nil {
 				responses = append(responses, service.VerifyResponse{
 					Email:   email,
@@ -114,10 +150,22 @@ func ImportCSVHandler(svc *service.EmailVerificationService, apiKey string) fibe
 	}
 }
 
-func CreateSMTPAccountHandler(svc *service.EmailVerificationService, apiKey string) fiber.Handler {
+// @Summary Create SMTP account
+// @Description Creates a new SMTP account for sending probe emails
+// @Tags smtp
+// @Accept json
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Param request body service.SMTPAccountCreateRequest true "SMTP account details"
+// @Success 201 {object} store.SMTPAccount
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Router /smtp-accounts [post]
+func CreateSMTPAccountHandler(svc *service.EmailVerificationService, userSvc *service.UserService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		if err := checkAPIKey(c, apiKey); err != nil {
-			return err
+		user, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
 		}
 
 		var req service.SMTPAccountCreateRequest
@@ -125,7 +173,7 @@ func CreateSMTPAccountHandler(svc *service.EmailVerificationService, apiKey stri
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid JSON"})
 		}
 
-		account, err := svc.CreateSMTPAccount(context.Background(), req)
+		account, err := svc.CreateSMTPAccount(context.Background(), req, user.ID)
 		if err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 		}
@@ -134,13 +182,23 @@ func CreateSMTPAccountHandler(svc *service.EmailVerificationService, apiKey stri
 	}
 }
 
-func ListSMTPAccountsHandler(svc *service.EmailVerificationService, apiKey string) fiber.Handler {
+// @Summary List SMTP accounts
+// @Description Lists all SMTP accounts for the authenticated user
+// @Tags smtp
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Success 200 {object} map[string][]store.SMTPAccount
+// @Failure 401 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /smtp-accounts [get]
+func ListSMTPAccountsHandler(svc *service.EmailVerificationService, userSvc *service.UserService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		if err := checkAPIKey(c, apiKey); err != nil {
-			return err
+		user, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
 		}
 
-		accounts, err := svc.ListSMTPAccounts(context.Background())
+		accounts, err := svc.ListSMTPAccounts(context.Background(), user.ID)
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 		}
@@ -149,10 +207,22 @@ func ListSMTPAccountsHandler(svc *service.EmailVerificationService, apiKey strin
 	}
 }
 
-func CreateEmailTemplateHandler(svc *service.EmailVerificationService, apiKey string) fiber.Handler {
+// @Summary Create email template
+// @Description Creates a new email template for probe emails
+// @Tags templates
+// @Accept json
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Param request body service.EmailTemplateCreateRequest true "Template details"
+// @Success 201 {object} store.EmailTemplate
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Router /email-templates [post]
+func CreateEmailTemplateHandler(svc *service.EmailVerificationService, userSvc *service.UserService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		if err := checkAPIKey(c, apiKey); err != nil {
-			return err
+		user, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
 		}
 
 		var req service.EmailTemplateCreateRequest
@@ -160,7 +230,7 @@ func CreateEmailTemplateHandler(svc *service.EmailVerificationService, apiKey st
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid JSON"})
 		}
 
-		tmpl, err := svc.CreateEmailTemplate(context.Background(), req)
+		tmpl, err := svc.CreateEmailTemplate(context.Background(), req, user.ID)
 		if err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 		}
@@ -169,13 +239,23 @@ func CreateEmailTemplateHandler(svc *service.EmailVerificationService, apiKey st
 	}
 }
 
-func ListEmailTemplatesHandler(svc *service.EmailVerificationService, apiKey string) fiber.Handler {
+// @Summary List email templates
+// @Description Lists all email templates for the authenticated user
+// @Tags templates
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Success 200 {object} map[string][]store.EmailTemplate
+// @Failure 401 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /email-templates [get]
+func ListEmailTemplatesHandler(svc *service.EmailVerificationService, userSvc *service.UserService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		if err := checkAPIKey(c, apiKey); err != nil {
-			return err
+		user, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
 		}
 
-		templates, err := svc.ListEmailTemplates(context.Background())
+		templates, err := svc.ListEmailTemplates(context.Background(), user.ID)
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 		}
@@ -184,10 +264,69 @@ func ListEmailTemplatesHandler(svc *service.EmailVerificationService, apiKey str
 	}
 }
 
-// CheckTorHandler returns a handler that checks if traffic is routed through Tor.
+// @Summary Check Tor connectivity
+// @Description Checks if the API is properly routing traffic through Tor
+// @Tags health
+// @Produce json
+// @Success 200 {object} verifier.TorCheckResult
+// @Router /check-tor [get]
 func CheckTorHandler(v *verifier.EmailVerifier) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		result := v.CheckTor()
 		return c.JSON(result)
+	}
+}
+
+// @Summary Update webhook URL
+// @Description Updates the webhook URL for the authenticated user
+// @Tags users
+// @Accept json
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Param request body UpdateWebhookRequest true "Webhook URL"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Router /users/webhook [put]
+func UpdateWebhookHandler(userSvc *service.UserService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		user, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		var req UpdateWebhookRequest
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid JSON"})
+		}
+
+		if err := userSvc.UpdateWebhook(context.Background(), user.ID, req.WebhookURL); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		return c.JSON(fiber.Map{"message": "Webhook URL updated successfully"})
+	}
+}
+
+type UpdateWebhookRequest struct {
+	WebhookURL string `json:"webhook_url"`
+}
+
+// @Summary Get current user
+// @Description Returns the authenticated user's information
+// @Tags users
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Success 200 {object} store.User
+// @Failure 401 {object} map[string]string
+// @Router /users/me [get]
+func GetCurrentUserHandler(userSvc *service.UserService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		user, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		return c.JSON(user)
 	}
 }
