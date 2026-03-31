@@ -10,6 +10,7 @@ require (
 	github.com/jackc/pgx/v5 v5.9.1
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/swaggo/swag v1.16.6
+	golang.org/x/crypto v0.48.0
 	golang.org/x/net v0.50.0
 )
 

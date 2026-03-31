@@ -175,3 +175,37 @@ WHERE id = $1
 	}
 	return &rec, nil
 }
+
+func (r *Repository) UpdateSMTPAccount(ctx context.Context, id string, input store.SMTPAccountInput) (*store.SMTPAccount, error) {
+	now := time.Now().Unix()
+	query := `
+UPDATE smtp_accounts
+SET host = $2, port = $3, username = $4, password = $5, sender = $6, imap_host = $7, imap_port = $8, imap_mailbox = $9, daily_limit = $10, active = $11, updated_at = $12
+WHERE id = $1
+RETURNING id, user_id, host, port, username, password, sender, imap_host, imap_port, imap_mailbox, daily_limit, sent_today, reset_date, active, created_at, updated_at
+`
+	var rec store.SMTPAccount
+	err := r.db.GetContext(ctx, &rec, query,
+		id, input.Host, input.Port, input.Username, input.Password, input.Sender, input.IMAPHost, input.IMAPPort, input.IMAPMailbox, input.DailyLimit, input.Active, now,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("update smtp account: %w", err)
+	}
+	return &rec, nil
+}
+
+func (r *Repository) DeleteSMTPAccount(ctx context.Context, id string) error {
+	query := `DELETE FROM smtp_accounts WHERE id = $1`
+	result, err := r.db.ExecContext(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("delete smtp account: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("smtp account not found")
+	}
+	return nil
+}

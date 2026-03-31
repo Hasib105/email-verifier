@@ -1,23 +1,27 @@
 package store
 
 type User struct {
-	ID         string `db:"id" json:"id"`
-	Name       string `db:"name" json:"name"`
-	Email      string `db:"email" json:"email"`
-	APIKey     string `db:"api_key" json:"api_key"`
-	WebhookURL string `db:"webhook_url" json:"webhook_url"`
-	Active     bool   `db:"active" json:"active"`
-	CreatedAt  int64  `db:"created_at" json:"created_at"`
-	UpdatedAt  int64  `db:"updated_at" json:"updated_at"`
+	ID           string `db:"id" json:"id"`
+	Name         string `db:"name" json:"name"`
+	Email        string `db:"email" json:"email"`
+	PasswordHash string `db:"password_hash" json:"-"`
+	APIKey       string `db:"api_key" json:"api_key"`
+	WebhookURL   string `db:"webhook_url" json:"webhook_url"`
+	IsSuperuser  bool   `db:"is_superuser" json:"is_superuser"`
+	Active       bool   `db:"active" json:"active"`
+	CreatedAt    int64  `db:"created_at" json:"created_at"`
+	UpdatedAt    int64  `db:"updated_at" json:"updated_at"`
 }
 
 type UserInput struct {
-	ID         string
-	Name       string
-	Email      string
-	APIKey     string
-	WebhookURL string
-	Active     bool
+	ID           string
+	Name         string
+	Email        string
+	PasswordHash string
+	APIKey       string
+	WebhookURL   string
+	IsSuperuser  bool
+	Active       bool
 }
 
 type VerificationRecord struct {

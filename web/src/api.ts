@@ -2,10 +2,16 @@ import type {
   CsvImportResponse,
   EmailTemplate,
   EmailTemplateCreateRequest,
+  LoginRequest,
+  LoginResponse,
+  RegisterRequest,
+  RegisterResponse,
   SMTPAccount,
   SMTPAccountCreateRequest,
   TorCheckResponse,
   User,
+  VerificationRecord,
+  VerificationStats,
   VerifyResponse,
 } from './types'
 
@@ -61,7 +67,36 @@ async function request<T>(
   return (await res.json()) as T
 }
 
+async function requestNoAuth<T>(
+  baseUrl: string,
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const url = `${normalizeBaseUrl(baseUrl || DEFAULT_BASE_URL)}${path}`
+  const headers = new Headers(init.headers)
+  headers.set('Accept', 'application/json')
+
+  const res = await fetch(url, { ...init, headers })
+  if (!res.ok) {
+    let message = `Request failed with status ${res.status}`
+    try {
+      const data = (await res.json()) as { error?: string; message?: string }
+      if (data.error) {
+        message = data.error
+      } else if (data.message) {
+        message = data.message
+      }
+    } catch {
+      // keep default message when non-json response
+    }
+    throw new ApiError(message, res.status)
+  }
+
+  return (await res.json()) as T
+}
+
 export const api = {
+  // Health
   getHealth: async (baseUrl: string) => {
     const url = `${normalizeBaseUrl(baseUrl || DEFAULT_BASE_URL)}/health`
     const response = await fetch(url)
@@ -74,6 +109,22 @@ export const api = {
   getTorStatus: (config: ApiConfig) =>
     request<TorCheckResponse>(config, '/check-tor', { method: 'GET' }),
 
+  // Auth
+  login: (baseUrl: string, req: LoginRequest) =>
+    requestNoAuth<LoginResponse>(baseUrl, '/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    }),
+
+  register: (baseUrl: string, req: RegisterRequest) =>
+    requestNoAuth<RegisterResponse>(baseUrl, '/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    }),
+
+  // User
   getCurrentUser: (config: ApiConfig) =>
     request<User>(config, '/users/me', { method: 'GET' }),
 
@@ -84,6 +135,7 @@ export const api = {
       body: JSON.stringify({ webhook_url: webhookUrl }),
     }),
 
+  // Verification
   verifyEmail: (config: ApiConfig, email: string) =>
     request<VerifyResponse>(config, '/verify', {
       method: 'POST',
@@ -120,6 +172,16 @@ export const api = {
     return (await res.json()) as CsvImportResponse
   },
 
+  listVerifications: (config: ApiConfig, limit = 50, offset = 0) =>
+    request<{ items: VerificationRecord[] }>(config, `/verifications?limit=${limit}&offset=${offset}`, { method: 'GET' }),
+
+  getVerification: (config: ApiConfig, id: string) =>
+    request<VerificationRecord>(config, `/verifications/${id}`, { method: 'GET' }),
+
+  getVerificationStats: (config: ApiConfig) =>
+    request<VerificationStats>(config, '/verifications/stats', { method: 'GET' }),
+
+  // SMTP Accounts
   createSmtpAccount: (config: ApiConfig, payload: SMTPAccountCreateRequest) =>
     request<SMTPAccount>(config, '/smtp-accounts', {
       method: 'POST',
@@ -130,6 +192,20 @@ export const api = {
   listSmtpAccounts: (config: ApiConfig) =>
     request<{ items: SMTPAccount[] }>(config, '/smtp-accounts', { method: 'GET' }),
 
+  getSmtpAccount: (config: ApiConfig, id: string) =>
+    request<SMTPAccount>(config, `/smtp-accounts/${id}`, { method: 'GET' }),
+
+  updateSmtpAccount: (config: ApiConfig, id: string, payload: SMTPAccountCreateRequest) =>
+    request<SMTPAccount>(config, `/smtp-accounts/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  deleteSmtpAccount: (config: ApiConfig, id: string) =>
+    request<{ message: string }>(config, `/smtp-accounts/${id}`, { method: 'DELETE' }),
+
+  // Email Templates
   createEmailTemplate: (config: ApiConfig, payload: EmailTemplateCreateRequest) =>
     request<EmailTemplate>(config, '/email-templates', {
       method: 'POST',
@@ -139,9 +215,67 @@ export const api = {
 
   listEmailTemplates: (config: ApiConfig) =>
     request<{ items: EmailTemplate[] }>(config, '/email-templates', { method: 'GET' }),
+
+  getEmailTemplate: (config: ApiConfig, id: string) =>
+    request<EmailTemplate>(config, `/email-templates/${id}`, { method: 'GET' }),
+
+  updateEmailTemplate: (config: ApiConfig, id: string, payload: EmailTemplateCreateRequest) =>
+    request<EmailTemplate>(config, `/email-templates/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  deleteEmailTemplate: (config: ApiConfig, id: string) =>
+    request<{ message: string }>(config, `/email-templates/${id}`, { method: 'DELETE' }),
+
+  // Admin endpoints
+  adminListUsers: (config: ApiConfig) =>
+    request<{ items: User[] }>(config, '/admin/users', { method: 'GET' }),
+
+  adminListVerifications: (config: ApiConfig, limit = 50, offset = 0) =>
+    request<{ items: VerificationRecord[] }>(config, `/admin/verifications?limit=${limit}&offset=${offset}`, { method: 'GET' }),
+
+  adminListSmtpAccounts: (config: ApiConfig) =>
+    request<{ items: SMTPAccount[] }>(config, '/admin/smtp-accounts', { method: 'GET' }),
+
+  adminListTemplates: (config: ApiConfig) =>
+    request<{ items: EmailTemplate[] }>(config, '/admin/email-templates', { method: 'GET' }),
+
+  adminUpdateUser: (config: ApiConfig, id: string, payload: { is_superuser?: boolean }) =>
+    request<User>(config, `/admin/users/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  adminDeleteUser: (config: ApiConfig, id: string) =>
+    request<{ message: string }>(config, `/admin/users/${id}`, { method: 'DELETE' }),
+
+  adminDeleteVerification: (config: ApiConfig, id: string) =>
+    request<{ message: string }>(config, `/admin/verifications/${id}`, { method: 'DELETE' }),
+
+  // Settings
+  getSettings: (config: ApiConfig) =>
+    request<{ webhook_url: string }>(config, '/users/me', { method: 'GET' }),
+
+  updateSettings: (config: ApiConfig, payload: { webhook_url: string }) =>
+    request<{ message: string }>(config, '/users/webhook', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  testWebhook: (config: ApiConfig, webhookUrl: string) =>
+    request<{ message: string }>(config, '/users/webhook/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webhook_url: webhookUrl }),
+    }),
 }
 
 export const storageKeys = {
   baseUrl: 'email-verifier.base-url',
   apiKey: 'email-verifier.api-key',
+  user: 'email-verifier.user',
 }

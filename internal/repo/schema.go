@@ -11,8 +11,10 @@ CREATE TABLE IF NOT EXISTS users (
 	id TEXT PRIMARY KEY,
 	name TEXT NOT NULL,
 	email TEXT NOT NULL UNIQUE,
+	password_hash TEXT NOT NULL DEFAULT '',
 	api_key TEXT NOT NULL UNIQUE,
 	webhook_url TEXT NOT NULL DEFAULT '',
+	is_superuser BOOLEAN NOT NULL DEFAULT FALSE,
 	active BOOLEAN NOT NULL DEFAULT TRUE,
 	created_at BIGINT NOT NULL,
 	updated_at BIGINT NOT NULL
@@ -99,6 +101,10 @@ ALTER TABLE verifications ADD COLUMN IF NOT EXISTS smtp_account_id TEXT NOT NULL
 ALTER TABLE smtp_accounts ADD COLUMN IF NOT EXISTS imap_host TEXT NOT NULL DEFAULT '';
 ALTER TABLE smtp_accounts ADD COLUMN IF NOT EXISTS imap_port INTEGER NOT NULL DEFAULT 993;
 ALTER TABLE smtp_accounts ADD COLUMN IF NOT EXISTS imap_mailbox TEXT NOT NULL DEFAULT 'INBOX';
+
+-- Migration: Add password_hash and is_superuser to users
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_superuser BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Drop old unique constraints if they exist and create new ones
 DO $$ BEGIN

@@ -264,6 +264,350 @@ func ListEmailTemplatesHandler(svc *service.EmailVerificationService, userSvc *s
 	}
 }
 
+// @Summary Get email template by ID
+// @Description Returns a specific email template
+// @Tags templates
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Param id path string true "Template ID"
+// @Success 200 {object} store.EmailTemplate
+// @Failure 401 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /email-templates/{id} [get]
+func GetEmailTemplateHandler(svc *service.EmailVerificationService, userSvc *service.UserService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		_, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		id := c.Params("id")
+		template, err := svc.GetEmailTemplate(context.Background(), id)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+		if template == nil {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "template not found"})
+		}
+
+		return c.JSON(template)
+	}
+}
+
+// @Summary Update email template
+// @Description Updates an existing email template
+// @Tags templates
+// @Accept json
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Param id path string true "Template ID"
+// @Param request body service.EmailTemplateCreateRequest true "Template details"
+// @Success 200 {object} store.EmailTemplate
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Router /email-templates/{id} [put]
+func UpdateEmailTemplateHandler(svc *service.EmailVerificationService, userSvc *service.UserService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		user, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		id := c.Params("id")
+		var req service.EmailTemplateCreateRequest
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid JSON"})
+		}
+
+		tmpl, err := svc.UpdateEmailTemplate(context.Background(), id, req, user.ID)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		}
+		if tmpl == nil {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "template not found"})
+		}
+
+		return c.JSON(tmpl)
+	}
+}
+
+// @Summary Delete email template
+// @Description Deletes an email template
+// @Tags templates
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Param id path string true "Template ID"
+// @Success 200 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /email-templates/{id} [delete]
+func DeleteEmailTemplateHandler(svc *service.EmailVerificationService, userSvc *service.UserService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		_, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		id := c.Params("id")
+		if err := svc.DeleteEmailTemplate(context.Background(), id); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		return c.JSON(fiber.Map{"message": "template deleted"})
+	}
+}
+
+// @Summary Get SMTP account by ID
+// @Description Returns a specific SMTP account
+// @Tags smtp
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Param id path string true "Account ID"
+// @Success 200 {object} store.SMTPAccount
+// @Failure 401 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /smtp-accounts/{id} [get]
+func GetSMTPAccountHandler(svc *service.EmailVerificationService, userSvc *service.UserService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		_, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		id := c.Params("id")
+		account, err := svc.GetSMTPAccount(context.Background(), id)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+		if account == nil {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "account not found"})
+		}
+
+		return c.JSON(account)
+	}
+}
+
+// @Summary Update SMTP account
+// @Description Updates an existing SMTP account
+// @Tags smtp
+// @Accept json
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Param id path string true "Account ID"
+// @Param request body service.SMTPAccountCreateRequest true "Account details"
+// @Success 200 {object} store.SMTPAccount
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Router /smtp-accounts/{id} [put]
+func UpdateSMTPAccountHandler(svc *service.EmailVerificationService, userSvc *service.UserService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		user, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		id := c.Params("id")
+		var req service.SMTPAccountCreateRequest
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid JSON"})
+		}
+
+		account, err := svc.UpdateSMTPAccount(context.Background(), id, req, user.ID)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		}
+		if account == nil {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "account not found"})
+		}
+
+		return c.JSON(account)
+	}
+}
+
+// @Summary Delete SMTP account
+// @Description Deletes an SMTP account
+// @Tags smtp
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Param id path string true "Account ID"
+// @Success 200 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /smtp-accounts/{id} [delete]
+func DeleteSMTPAccountHandler(svc *service.EmailVerificationService, userSvc *service.UserService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		_, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		id := c.Params("id")
+		if err := svc.DeleteSMTPAccount(context.Background(), id); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		return c.JSON(fiber.Map{"message": "account deleted"})
+	}
+}
+
+// @Summary List verifications
+// @Description Lists email verifications for the authenticated user
+// @Tags verification
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Param limit query int false "Limit" default(50)
+// @Param offset query int false "Offset" default(0)
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} map[string]string
+// @Router /verifications [get]
+func ListVerificationsHandler(svc *service.EmailVerificationService, userSvc *service.UserService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		user, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		limit := c.QueryInt("limit", 50)
+		offset := c.QueryInt("offset", 0)
+
+		items, err := svc.ListVerifications(context.Background(), user.ID, limit, offset)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		return c.JSON(fiber.Map{"items": items})
+	}
+}
+
+// @Summary Get verification by ID
+// @Description Returns a specific verification record
+// @Tags verification
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Param id path string true "Verification ID"
+// @Success 200 {object} store.VerificationRecord
+// @Failure 401 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /verifications/{id} [get]
+func GetVerificationHandler(svc *service.EmailVerificationService, userSvc *service.UserService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		_, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		id := c.Params("id")
+		record, err := svc.GetVerification(context.Background(), id)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+		if record == nil {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "verification not found"})
+		}
+
+		return c.JSON(record)
+	}
+}
+
+// @Summary Get verification stats
+// @Description Returns verification statistics for the authenticated user
+// @Tags verification
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} map[string]string
+// @Router /verifications/stats [get]
+func GetVerificationStatsHandler(svc *service.EmailVerificationService, userSvc *service.UserService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		user, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		stats, err := svc.GetVerificationStats(context.Background(), user.ID)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		total := 0
+		for _, v := range stats {
+			total += v
+		}
+
+		return c.JSON(fiber.Map{
+			"total":  total,
+			"by_status": stats,
+		})
+	}
+}
+
+// Admin handlers for all models
+
+// @Summary List all verifications (admin)
+// @Description Returns all verifications for superusers
+// @Tags admin
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Param limit query int false "Limit" default(50)
+// @Param offset query int false "Offset" default(0)
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Router /admin/verifications [get]
+func AdminListVerificationsHandler(svc *service.EmailVerificationService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		limit := c.QueryInt("limit", 50)
+		offset := c.QueryInt("offset", 0)
+
+		items, err := svc.ListAllVerifications(context.Background(), limit, offset)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		return c.JSON(fiber.Map{"items": items})
+	}
+}
+
+// @Summary List all SMTP accounts (admin)
+// @Description Returns all SMTP accounts for superusers
+// @Tags admin
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Success 200 {object} map[string][]store.SMTPAccount
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Router /admin/smtp-accounts [get]
+func AdminListSMTPAccountsHandler(svc *service.EmailVerificationService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		accounts, err := svc.ListSMTPAccounts(context.Background(), "")
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		return c.JSON(fiber.Map{"items": accounts})
+	}
+}
+
+// @Summary List all email templates (admin)
+// @Description Returns all email templates for superusers
+// @Tags admin
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Success 200 {object} map[string][]store.EmailTemplate
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Router /admin/email-templates [get]
+func AdminListEmailTemplatesHandler(svc *service.EmailVerificationService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		templates, err := svc.ListEmailTemplates(context.Background(), "")
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		return c.JSON(fiber.Map{"items": templates})
+	}
+}
+
 // @Summary Check Tor connectivity
 // @Description Checks if the API is properly routing traffic through Tor
 // @Tags health

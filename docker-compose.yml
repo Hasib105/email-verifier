@@ -60,6 +60,18 @@ services:
       - verifier-net
     restart: unless-stopped
 
+  web:
+    build: 
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+    networks:
+      - verifier-net
+    restart: unless-stopped
+
 networks:
   verifier-net:
     driver: bridge

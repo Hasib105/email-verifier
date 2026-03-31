@@ -102,3 +102,66 @@ LIMIT 1
 	}
 	return &rec, nil
 }
+
+func (r *Repository) GetEmailTemplateByID(ctx context.Context, id string) (*store.EmailTemplate, error) {
+	var rec store.EmailTemplate
+	query := `
+SELECT id, user_id, name, subject_template, body_template, active, created_at, updated_at
+FROM email_templates
+WHERE id = $1
+`
+	if err := r.db.GetContext(ctx, &rec, query, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get email template by id: %w", err)
+	}
+	return &rec, nil
+}
+
+func (r *Repository) UpdateEmailTemplate(ctx context.Context, id string, input store.EmailTemplateInput) (*store.EmailTemplate, error) {
+	now := time.Now().Unix()
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if input.Active {
+		if _, err := tx.ExecContext(ctx, `UPDATE email_templates SET active = FALSE, updated_at = $1 WHERE active = TRUE AND user_id = $2 AND id != $3`, now, input.UserID, id); err != nil {
+			return nil, fmt.Errorf("deactivate old templates: %w", err)
+		}
+	}
+
+	query := `
+UPDATE email_templates
+SET name = $2, subject_template = $3, body_template = $4, active = $5, updated_at = $6
+WHERE id = $1
+RETURNING id, user_id, name, subject_template, body_template, active, created_at, updated_at
+`
+	var rec store.EmailTemplate
+	if err := tx.GetContext(ctx, &rec, query, id, input.Name, input.SubjectTemplate, input.BodyTemplate, input.Active, now); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("update email template: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit transaction: %w", err)
+	}
+	return &rec, nil
+}
+
+func (r *Repository) DeleteEmailTemplate(ctx context.Context, id string) error {
+	query := `DELETE FROM email_templates WHERE id = $1`
+	result, err := r.db.ExecContext(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("delete email template: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("email template not found")
+	}
+	return nil
+}

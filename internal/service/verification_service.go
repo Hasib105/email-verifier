@@ -113,7 +113,8 @@ func (s *EmailVerificationService) VerifyEmail(ctx context.Context, email string
 		UpdatedAt:      now,
 	}
 
-	requiresFallback := directResult.Status == "error" || directResult.Status == "unknown" || directResult.Status == "greylisted"
+	// Use RequireProbe from verifier result, or fallback to status-based check
+	requiresFallback := directResult.RequireProbe || directResult.Status == "error" || directResult.Status == "unknown" || directResult.Status == "greylisted"
 	if requiresFallback {
 		token := uuid.NewString()
 		record.ProbeToken = token
@@ -127,7 +128,7 @@ func (s *EmailVerificationService) VerifyEmail(ctx context.Context, email string
 		} else {
 			record.SMTPAccountID = accountID
 			record.Status = "pending_bounce_check"
-			record.Message = fmt.Sprintf("probe sent via smtp account %s; single bounce check scheduled at 6h", accountID)
+			record.Message = fmt.Sprintf("probe sent via smtp account %s; bounce check scheduled at 6h", accountID)
 			record.NextCheckAt = time.Now().Add(s.cfg.SecondBounceDelay).Unix()
 			record.Finalized = false
 		}
@@ -239,6 +240,112 @@ func (s *EmailVerificationService) ListEmailTemplates(ctx context.Context, userI
 	return s.repo.ListEmailTemplatesByUser(ctx, userID)
 }
 
+func (s *EmailVerificationService) GetEmailTemplate(ctx context.Context, id string) (*store.EmailTemplate, error) {
+	return s.repo.GetEmailTemplateByID(ctx, id)
+}
+
+func (s *EmailVerificationService) UpdateEmailTemplate(ctx context.Context, id string, req EmailTemplateCreateRequest, userID string) (*store.EmailTemplate, error) {
+	req.Name = strings.TrimSpace(req.Name)
+	req.SubjectTemplate = strings.TrimSpace(req.SubjectTemplate)
+	req.BodyTemplate = strings.TrimSpace(req.BodyTemplate)
+	if req.Name == "" || req.SubjectTemplate == "" || req.BodyTemplate == "" {
+		return nil, errors.New("name, subject_template, and body_template are required")
+	}
+
+	active := true
+	if req.Active != nil {
+		active = *req.Active
+	}
+
+	input := store.EmailTemplateInput{
+		ID:              id,
+		UserID:          userID,
+		Name:            req.Name,
+		SubjectTemplate: req.SubjectTemplate,
+		BodyTemplate:    req.BodyTemplate,
+		Active:          active,
+	}
+
+	return s.repo.UpdateEmailTemplate(ctx, id, input)
+}
+
+func (s *EmailVerificationService) DeleteEmailTemplate(ctx context.Context, id string) error {
+	return s.repo.DeleteEmailTemplate(ctx, id)
+}
+
+func (s *EmailVerificationService) GetSMTPAccount(ctx context.Context, id string) (*store.SMTPAccount, error) {
+	return s.repo.GetSMTPAccountByID(ctx, id)
+}
+
+func (s *EmailVerificationService) UpdateSMTPAccount(ctx context.Context, id string, req SMTPAccountCreateRequest, userID string) (*store.SMTPAccount, error) {
+	req.Host = strings.TrimSpace(req.Host)
+	req.Username = strings.TrimSpace(req.Username)
+	req.Sender = strings.TrimSpace(req.Sender)
+	req.IMAPHost = strings.TrimSpace(req.IMAPHost)
+	req.IMAPMailbox = strings.TrimSpace(req.IMAPMailbox)
+
+	if req.Host == "" || req.Username == "" || req.Sender == "" {
+		return nil, errors.New("host, username, and sender are required")
+	}
+	if req.IMAPHost == "" {
+		req.IMAPHost = req.Host
+	}
+	if req.Port == 0 {
+		req.Port = 587
+	}
+	if req.IMAPPort == 0 {
+		req.IMAPPort = 993
+	}
+	if req.IMAPMailbox == "" {
+		req.IMAPMailbox = "INBOX"
+	}
+	if req.DailyLimit <= 0 {
+		req.DailyLimit = 100
+	}
+
+	active := true
+	if req.Active != nil {
+		active = *req.Active
+	}
+
+	input := store.SMTPAccountInput{
+		ID:          id,
+		UserID:      userID,
+		Host:        req.Host,
+		Port:        req.Port,
+		Username:    req.Username,
+		Password:    req.Password,
+		Sender:      req.Sender,
+		IMAPHost:    req.IMAPHost,
+		IMAPPort:    req.IMAPPort,
+		IMAPMailbox: req.IMAPMailbox,
+		DailyLimit:  req.DailyLimit,
+		Active:      active,
+	}
+
+	return s.repo.UpdateSMTPAccount(ctx, id, input)
+}
+
+func (s *EmailVerificationService) DeleteSMTPAccount(ctx context.Context, id string) error {
+	return s.repo.DeleteSMTPAccount(ctx, id)
+}
+
+func (s *EmailVerificationService) ListVerifications(ctx context.Context, userID string, limit, offset int) ([]store.VerificationRecord, error) {
+	return s.repo.ListVerificationsByUser(ctx, userID, limit, offset)
+}
+
+func (s *EmailVerificationService) GetVerification(ctx context.Context, id string) (*store.VerificationRecord, error) {
+	return s.repo.GetVerificationByID(ctx, id)
+}
+
+func (s *EmailVerificationService) GetVerificationStats(ctx context.Context, userID string) (map[string]int, error) {
+	return s.repo.GetVerificationStats(ctx, userID)
+}
+
+func (s *EmailVerificationService) ListAllVerifications(ctx context.Context, limit, offset int) ([]store.VerificationRecord, error) {
+	return s.repo.ListAllVerifications(ctx, limit, offset)
+}
+
 func (s *EmailVerificationService) StartScheduler(ctx context.Context) {
 	ticker := time.NewTicker(s.cfg.CheckInterval)
 	defer ticker.Stop()
@@ -348,4 +455,25 @@ func responseFromRecord(rec *store.VerificationRecord, cached bool) VerifyRespon
 		resp.NextCheckAt = rec.NextCheckAt
 	}
 	return resp
+}
+
+func (s *EmailVerificationService) AdminDeleteVerification(ctx context.Context, id string) error {
+	return s.repo.DeleteVerification(ctx, id)
+}
+
+func (s *EmailVerificationService) SendTestWebhook(ctx context.Context, webhookURL string) error {
+	now := time.Now().Unix()
+	testRecord := &store.VerificationRecord{
+		ID:             "test-" + uuid.NewString()[:8],
+		Email:          "test@example.com",
+		Status:         "valid",
+		Message:        "This is a test webhook notification",
+		Source:         "test",
+		FirstCheckedAt: now,
+		LastCheckedAt:  now,
+		Finalized:      true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	return s.webhook.SendWithURL(ctx, "test.webhook", testRecord, webhookURL)
 }

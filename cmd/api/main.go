@@ -84,21 +84,45 @@ func main() {
 	})
 	app.Get("/check-tor", handler.CheckTorHandler(verifier))
 
-	// User management (no auth required for these)
+	// Auth routes (no auth required)
+	app.Post("/auth/register", handler.RegisterHandler(userService))
+	app.Post("/auth/login", handler.LoginHandler(userService))
+
+	// User management
 	app.Get("/users/me", handler.GetCurrentUserHandler(userService))
 	app.Put("/users/webhook", handler.UpdateWebhookHandler(userService))
+	app.Post("/users/webhook/test", handler.TestWebhookHandler(verificationService))
 
 	// Verification routes
 	app.Post("/verify", handler.VerifyHandler(verificationService, userService))
 	app.Post("/verify/import-csv", handler.ImportCSVHandler(verificationService, userService))
+	app.Get("/verifications", handler.ListVerificationsHandler(verificationService, userService))
+	app.Get("/verifications/stats", handler.GetVerificationStatsHandler(verificationService, userService))
+	app.Get("/verifications/:id", handler.GetVerificationHandler(verificationService, userService))
 
 	// SMTP account routes
 	app.Post("/smtp-accounts", handler.CreateSMTPAccountHandler(verificationService, userService))
 	app.Get("/smtp-accounts", handler.ListSMTPAccountsHandler(verificationService, userService))
+	app.Get("/smtp-accounts/:id", handler.GetSMTPAccountHandler(verificationService, userService))
+	app.Put("/smtp-accounts/:id", handler.UpdateSMTPAccountHandler(verificationService, userService))
+	app.Delete("/smtp-accounts/:id", handler.DeleteSMTPAccountHandler(verificationService, userService))
 
 	// Email template routes
 	app.Post("/email-templates", handler.CreateEmailTemplateHandler(verificationService, userService))
 	app.Get("/email-templates", handler.ListEmailTemplatesHandler(verificationService, userService))
+	app.Get("/email-templates/:id", handler.GetEmailTemplateHandler(verificationService, userService))
+	app.Put("/email-templates/:id", handler.UpdateEmailTemplateHandler(verificationService, userService))
+	app.Delete("/email-templates/:id", handler.DeleteEmailTemplateHandler(verificationService, userService))
+
+	// Admin routes (superuser only)
+	admin := app.Group("/admin", handler.RequireSuperuser(userService))
+	admin.Get("/users", handler.AdminListUsersHandler(userService))
+	admin.Put("/users/:id", handler.AdminUpdateUserHandler(userService))
+	admin.Delete("/users/:id", handler.AdminDeleteUserHandler(userService))
+	admin.Get("/verifications", handler.AdminListVerificationsHandler(verificationService))
+	admin.Delete("/verifications/:id", handler.AdminDeleteVerificationHandler(verificationService))
+	admin.Get("/smtp-accounts", handler.AdminListSMTPAccountsHandler(verificationService))
+	admin.Get("/email-templates", handler.AdminListEmailTemplatesHandler(verificationService))
 
 	log.Printf("Starting API on port %s with Tor at %s", cfg.Port, cfg.TorSocksAddr)
 	log.Printf("Swagger UI available at http://localhost:%s/swagger/", cfg.Port)
