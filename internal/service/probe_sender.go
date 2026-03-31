@@ -9,13 +9,15 @@ import (
 	"net"
 	"net/smtp"
 	"strings"
+	"sync/atomic"
 
 	"golang.org/x/net/proxy"
 )
 
 type SMTPProbeSender struct {
-	repo         *repo.Repository
-	torSocksAddr string
+	repo            *repo.Repository
+	torSocksAddr    string
+	rotationCounter uint64 // atomic counter for template rotation
 }
 
 func NewSMTPProbeSender(r *repo.Repository, torSocksAddr string) *SMTPProbeSender {
@@ -53,10 +55,14 @@ func (s *SMTPProbeSender) SendProbeForUser(ctx context.Context, targetEmail, tok
 	subject := fmt.Sprintf("Email verification probe %s", token)
 	body := fmt.Sprintf("This is an automated verification probe. Token: %s\nRecipient: %s\n", token, targetEmail)
 
+	// Get rotating template - increment counter atomically for round-robin
+	rotationIndex := int(atomic.AddUint64(&s.rotationCounter, 1))
+	
 	var tmpl *store.EmailTemplate
 	if userID != "" {
-		tmpl, err = s.repo.GetActiveEmailTemplateByUser(ctx, userID)
+		tmpl, err = s.repo.GetRotatingEmailTemplate(ctx, userID, rotationIndex)
 	} else {
+		// For non-user requests, use any available template
 		tmpl, err = s.repo.GetActiveEmailTemplate(ctx)
 	}
 	if err == nil && tmpl != nil {

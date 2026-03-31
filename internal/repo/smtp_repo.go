@@ -74,6 +74,24 @@ ORDER BY active DESC, sent_today ASC, created_at ASC
 	return records, nil
 }
 
+func (r *Repository) ResetSMTPDailyUsage(ctx context.Context) (int64, error) {
+	result, err := r.db.ExecContext(
+		ctx,
+		`UPDATE smtp_accounts
+		 SET sent_today = 0, reset_date = CURRENT_DATE, updated_at = $1
+		 WHERE reset_date < CURRENT_DATE`,
+		time.Now().Unix(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("reset smtp daily usage: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("reset smtp daily usage rows affected: %w", err)
+	}
+	return rows, nil
+}
+
 func (r *Repository) AcquireSMTPAccountForSend(ctx context.Context) (*store.SMTPAccount, error) {
 	tx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {

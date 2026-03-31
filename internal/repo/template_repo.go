@@ -103,6 +103,29 @@ LIMIT 1
 	return &rec, nil
 }
 
+// GetRotatingEmailTemplate returns a template using round-robin rotation
+// It uses the count parameter to determine which template to use
+func (r *Repository) GetRotatingEmailTemplate(ctx context.Context, userID string, rotationIndex int) (*store.EmailTemplate, error) {
+	templates := []store.EmailTemplate{}
+	query := `
+SELECT id, user_id, name, subject_template, body_template, active, created_at, updated_at
+FROM email_templates
+WHERE user_id = $1
+ORDER BY created_at ASC
+`
+	if err := r.db.SelectContext(ctx, &templates, query, userID); err != nil {
+		return nil, fmt.Errorf("list email templates for rotation: %w", err)
+	}
+
+	if len(templates) == 0 {
+		return nil, nil
+	}
+
+	// Round-robin selection
+	index := rotationIndex % len(templates)
+	return &templates[index], nil
+}
+
 func (r *Repository) GetEmailTemplateByID(ctx context.Context, id string) (*store.EmailTemplate, error) {
 	var rec store.EmailTemplate
 	query := `

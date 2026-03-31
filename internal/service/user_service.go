@@ -44,6 +44,69 @@ type SignupResponse struct {
 	APIKey string      `json:"api_key"`
 }
 
+type CreateSuperuserRequest struct {
+	Name     string
+	Email    string
+	Password string
+}
+
+func (s *UserService) CreateSuperuser(ctx context.Context, req CreateSuperuserRequest) (*SignupResponse, error) {
+	req.Name = strings.TrimSpace(req.Name)
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+
+	if req.Name == "" {
+		return nil, errors.New("name is required")
+	}
+	if req.Email == "" {
+		return nil, errors.New("email is required")
+	}
+	if !strings.Contains(req.Email, "@") {
+		return nil, errors.New("invalid email format")
+	}
+	if len(req.Password) < 6 {
+		return nil, errors.New("password must be at least 6 characters")
+	}
+
+	existing, err := s.repo.GetUserByEmail(ctx, req.Email)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return nil, errors.New("user with this email already exists")
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, errors.New("failed to hash password")
+	}
+
+	apiKey, err := generateAPIKey()
+	if err != nil {
+		return nil, err
+	}
+
+	input := store.UserInput{
+		ID:           uuid.NewString(),
+		Name:         req.Name,
+		Email:        req.Email,
+		PasswordHash: string(passwordHash),
+		APIKey:       apiKey,
+		WebhookURL:   "",
+		IsSuperuser:  true, // Always true for superuser
+		Active:       true,
+	}
+
+	user, err := s.repo.CreateUser(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+
+	return &SignupResponse{
+		User:   user,
+		APIKey: apiKey,
+	}, nil
+}
+
 func (s *UserService) Signup(ctx context.Context, req SignupRequest) (*SignupResponse, error) {
 	req.Name = strings.TrimSpace(req.Name)
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
@@ -83,13 +146,7 @@ func (s *UserService) Signup(ctx context.Context, req SignupRequest) (*SignupRes
 		return nil, err
 	}
 
-	// First user is superuser
-	users, err := s.repo.ListUsers(ctx)
-	if err != nil {
-		return nil, err
-	}
-	isSuperuser := len(users) == 0
-
+	// Regular signup - users are never superusers (use CLI to create superuser)
 	input := store.UserInput{
 		ID:           uuid.NewString(),
 		Name:         req.Name,
@@ -97,7 +154,7 @@ func (s *UserService) Signup(ctx context.Context, req SignupRequest) (*SignupRes
 		PasswordHash: string(passwordHash),
 		APIKey:       apiKey,
 		WebhookURL:   req.WebhookURL,
-		IsSuperuser:  isSuperuser,
+		IsSuperuser:  false,
 		Active:       true,
 	}
 

@@ -347,14 +347,29 @@ func (s *EmailVerificationService) ListAllVerifications(ctx context.Context, lim
 }
 
 func (s *EmailVerificationService) StartScheduler(ctx context.Context) {
-	ticker := time.NewTicker(s.cfg.CheckInterval)
-	defer ticker.Stop()
+	if count, err := s.repo.ResetSMTPDailyUsage(ctx); err != nil {
+		log.Printf("warning: initial smtp daily reset failed: %v", err)
+	} else if count > 0 {
+		log.Printf("info: initial reset of smtp daily usage counters for %d account(s)", count)
+	}
+
+	bounceTicker := time.NewTicker(s.cfg.CheckInterval)
+	defer bounceTicker.Stop()
+
+	dailyResetTicker := time.NewTicker(24 * time.Hour)
+	defer dailyResetTicker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-dailyResetTicker.C:
+			if count, err := s.repo.ResetSMTPDailyUsage(ctx); err != nil {
+				log.Printf("warning: smtp daily reset failed: %v", err)
+			} else if count > 0 {
+				log.Printf("info: reset smtp daily usage counters for %d account(s)", count)
+			}
+		case <-bounceTicker.C:
 			if err := s.ProcessDueChecks(ctx); err != nil {
 				log.Printf("warning: process due checks failed: %v", err)
 			}
