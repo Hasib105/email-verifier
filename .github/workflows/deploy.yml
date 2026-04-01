@@ -11,7 +11,6 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
 
 jobs:
   build-images:
@@ -23,6 +22,13 @@ jobs:
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Compute lowercase image prefix
+        id: image_prefix
+        shell: bash
+        run: |
+          repo_lc="$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          echo "value=ghcr.io/${repo_lc}" >> "$GITHUB_OUTPUT"
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -38,8 +44,8 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: |
-            ${{ env.IMAGE_PREFIX }}-api:latest
-            ${{ env.IMAGE_PREFIX }}-api:${{ github.sha }}
+            ${{ steps.image_prefix.outputs.value }}-api:latest
+            ${{ steps.image_prefix.outputs.value }}-api:${{ github.sha }}
 
       - name: Build and push Web image
         uses: docker/build-push-action@v6
@@ -48,8 +54,8 @@ jobs:
           file: ./web/Dockerfile
           push: true
           tags: |
-            ${{ env.IMAGE_PREFIX }}-web:latest
-            ${{ env.IMAGE_PREFIX }}-web:${{ github.sha }}
+            ${{ steps.image_prefix.outputs.value }}-web:latest
+            ${{ steps.image_prefix.outputs.value }}-web:${{ github.sha }}
 
       - name: Build and push Tor image
         uses: docker/build-push-action@v6
@@ -58,8 +64,8 @@ jobs:
           file: ./tor.Dockerfile
           push: true
           tags: |
-            ${{ env.IMAGE_PREFIX }}-tor:latest
-            ${{ env.IMAGE_PREFIX }}-tor:${{ github.sha }}
+            ${{ steps.image_prefix.outputs.value }}-tor:latest
+            ${{ steps.image_prefix.outputs.value }}-tor:${{ github.sha }}
 
   deploy:
     runs-on: ubuntu-latest
@@ -95,7 +101,8 @@ jobs:
             fi
 
             echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-            export GHCR_IMAGE_PREFIX="ghcr.io/${{ github.repository }}"
+            repo_lc="$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+            export GHCR_IMAGE_PREFIX="ghcr.io/${repo_lc}"
 
             docker compose --env-file .env -f deploy/docker-compose.prod.yml pull
             docker compose --env-file .env -f deploy/docker-compose.prod.yml up -d
