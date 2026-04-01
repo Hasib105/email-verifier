@@ -4,8 +4,6 @@ import { DashboardLayout } from './layouts/DashboardLayout';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 import { Dashboard } from './pages/Dashboard';
-import { EmailConfig } from './pages/EmailConfig';
-import { Templates } from './pages/Templates';
 import { Playground } from './pages/Playground';
 import { Settings } from './pages/Settings';
 import { EmailStatus } from './pages/EmailStatus';
@@ -30,10 +28,8 @@ export default function App() {
       >
         <Route index element={<Dashboard />} />
         <Route path="playground" element={<Playground />} />
-        <Route path="email-config" element={<EmailConfig />} />
-        <Route path="templates" element={<Templates />} />
         <Route path="settings" element={<Settings />} />
-        <Route path="status" element={<EmailStatus />} />
+        <Route path="verifications" element={<EmailStatus />} />
         <Route path="admin" element={<AdminPanel />} />
       </Route>
     </Routes>

@@ -23,10 +23,9 @@ func NewUserService(r *repo.Repository) *UserService {
 }
 
 type SignupRequest struct {
-	Name       string `json:"name"`
-	Email      string `json:"email"`
-	Password   string `json:"password"`
-	WebhookURL string `json:"webhook_url"`
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 type LoginRequest struct {
@@ -110,7 +109,6 @@ func (s *UserService) CreateSuperuser(ctx context.Context, req CreateSuperuserRe
 func (s *UserService) Signup(ctx context.Context, req SignupRequest) (*SignupResponse, error) {
 	req.Name = strings.TrimSpace(req.Name)
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
-	req.WebhookURL = strings.TrimSpace(req.WebhookURL)
 
 	if req.Name == "" {
 		return nil, errors.New("name is required")
@@ -153,7 +151,7 @@ func (s *UserService) Signup(ctx context.Context, req SignupRequest) (*SignupRes
 		Email:        req.Email,
 		PasswordHash: string(passwordHash),
 		APIKey:       apiKey,
-		WebhookURL:   req.WebhookURL,
+		WebhookURL:   "",
 		IsSuperuser:  false,
 		Active:       true,
 	}
@@ -209,10 +207,6 @@ func (s *UserService) AuthenticateByAPIKey(ctx context.Context, apiKey string) (
 
 func (s *UserService) GetUserByID(ctx context.Context, id string) (*store.User, error) {
 	return s.repo.GetUserByID(ctx, id)
-}
-
-func (s *UserService) UpdateWebhook(ctx context.Context, userID, webhookURL string) error {
-	return s.repo.UpdateUserWebhook(ctx, userID, webhookURL)
 }
 
 func (s *UserService) ListUsers(ctx context.Context) ([]store.User, error) {

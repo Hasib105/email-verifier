@@ -25,7 +25,6 @@ When pushing to `main`, `.github/workflows/deploy.yml` will:
 1. Build and push images in GitHub Actions runner:
    - `ghcr.io/<owner>/<repo>-api:latest`
    - `ghcr.io/<owner>/<repo>-web:latest`
-   - `ghcr.io/<owner>/<repo>-tor:latest`
 2. SSH into your server.
 3. Pull images and restart services using:
    - `docker compose --env-file .env -f deploy/docker-compose.prod.yml pull`
@@ -39,12 +38,18 @@ When pushing to `main`, `.github/workflows/deploy.yml` will:
 - `SERVER_SSH_PORT`
 - `SERVER_APP_DIR` (optional, default is `~/email-verifier-api`)
 
-Your application `.env` values should also exist as repo secrets (for example `API_KEY`, `DB_PASSWORD`, etc.).
+Your application `.env` values should also exist as repo secrets (for example `DB_PASSWORD`, `VERIFIER_MAIL_FROM`, and `VERIFIER_EHLO_DOMAIN`).
 
 GHCR auth is automatic in deploy workflow:
 
 - username: `${{ github.actor }}`
 - token: `${{ github.token }}`
+
+## V2 Runtime Notes
+
+- Production no longer runs a Tor sidecar.
+- The API now performs direct SMTP callouts and optional enrichment only.
+- Make sure the server can egress to recipient MX hosts on TCP/25 and that `VERIFIER_EHLO_DOMAIN` and `VERIFIER_MAIL_FROM` are set to values you control.
 
 ## One Command To Upload Secrets
 

@@ -2,13 +2,13 @@ package service
 
 import (
 	"context"
-	"email-verifier-api/internal/repo"
 	"errors"
 	"fmt"
 	"log"
 	"strings"
 	"time"
 
+	"email-verifier-api/internal/repo"
 	"email-verifier-api/internal/store"
 	"email-verifier-api/internal/verifier"
 
@@ -16,9 +16,12 @@ import (
 )
 
 type ServiceConfig struct {
-	FirstBounceDelay  time.Duration
-	SecondBounceDelay time.Duration
-	CheckInterval     time.Duration
+	DeliverableTTL    time.Duration
+	UndeliverableTTL  time.Duration
+	AcceptAllTTL      time.Duration
+	UnknownTTL        time.Duration
+	DomainBaselineTTL time.Duration
+	EnrichmentWorkers int
 }
 
 var (
@@ -27,67 +30,123 @@ var (
 )
 
 type VerifyResponse struct {
-	ID          string `json:"id"`
-	Email       string `json:"email"`
-	Status      string `json:"status"`
-	Message     string `json:"message"`
-	Source      string `json:"source"`
-	Cached      bool   `json:"cached"`
-	Finalized   bool   `json:"finalized"`
-	NextCheckAt int64  `json:"next_check_at,omitempty"`
+	ID                string                             `json:"id"`
+	Email             string                             `json:"email"`
+	Domain            string                             `json:"domain"`
+	Classification    string                             `json:"classification"`
+	ConfidenceScore   int                                `json:"confidence_score"`
+	RiskLevel         string                             `json:"risk_level"`
+	Deterministic     bool                               `json:"deterministic"`
+	State             string                             `json:"state"`
+	ReasonCodes       []string                           `json:"reason_codes"`
+	ProtocolSummary   string                             `json:"protocol_summary"`
+	EnrichmentSummary string                             `json:"enrichment_summary"`
+	ExpiresAt         int64                              `json:"expires_at"`
+	LastVerifiedAt    int64                              `json:"last_verified_at"`
+	LastEnrichedAt    int64                              `json:"last_enriched_at"`
+	Cached            bool                               `json:"cached"`
+	Evidence          []store.EnrichmentEvidence         `json:"evidence,omitempty"`
+	Callouts          []store.VerificationCalloutAttempt `json:"callouts,omitempty"`
 }
 
 type EmailVerificationService struct {
-	verifier      *verifier.EmailVerifier
-	repo          *repo.Repository
-	probeSender   *SMTPProbeSender
-	bounceChecker *IMAPBounceChecker
-	webhook       WebhookDispatcher
-	cfg           ServiceConfig
+	verifier        *verifier.EmailVerifier
+	repo            *repo.Repository
+	enricher        *EnrichmentService
+	cfg             ServiceConfig
+	enrichmentQueue chan string
 }
 
-type SMTPAccountCreateRequest struct {
-	Host        string `json:"host"`
-	Port        int    `json:"port"`
-	Username    string `json:"username"`
-	Password    string `json:"password"`
-	Sender      string `json:"sender"`
-	IMAPHost    string `json:"imap_host"`
-	IMAPPort    int    `json:"imap_port"`
-	IMAPMailbox string `json:"imap_mailbox"`
-	DailyLimit  int    `json:"daily_limit"`
-	Active      *bool  `json:"active"`
-}
-
-type EmailTemplateCreateRequest struct {
-	Name            string `json:"name"`
-	SubjectTemplate string `json:"subject_template"`
-	BodyTemplate    string `json:"body_template"`
-	Active          *bool  `json:"active"`
-}
-
-func NewEmailVerificationService(
-	v *verifier.EmailVerifier,
-	r *repo.Repository,
-	probeSender *SMTPProbeSender,
-	bounceChecker *IMAPBounceChecker,
-	webhook WebhookDispatcher,
-	cfg ServiceConfig,
-) *EmailVerificationService {
+func NewEmailVerificationService(v *verifier.EmailVerifier, r *repo.Repository, enricher *EnrichmentService, cfg ServiceConfig) *EmailVerificationService {
+	if cfg.EnrichmentWorkers <= 0 {
+		cfg.EnrichmentWorkers = 1
+	}
 	return &EmailVerificationService{
-		verifier:      v,
-		repo:          r,
-		probeSender:   probeSender,
-		bounceChecker: bounceChecker,
-		webhook:       webhook,
-		cfg:           cfg,
+		verifier:        v,
+		repo:            r,
+		enricher:        enricher,
+		cfg:             cfg,
+		enrichmentQueue: make(chan string, 256),
+	}
+}
+
+func (s *EmailVerificationService) StartBackground(ctx context.Context) {
+	workers := s.cfg.EnrichmentWorkers
+	if workers < 1 {
+		workers = 1
+	}
+
+	for i := 0; i < workers; i++ {
+		go s.runEnrichmentWorker(ctx)
+	}
+}
+
+func (s *EmailVerificationService) runEnrichmentWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case verificationID := <-s.enrichmentQueue:
+			if err := s.enrichVerification(ctx, verificationID); err != nil {
+				log.Printf("warning: enrichment failed for %s: %v", verificationID, err)
+			}
+		}
 	}
 }
 
 func (s *EmailVerificationService) VerifyEmail(ctx context.Context, email string, user *store.User) (VerifyResponse, error) {
-	email = strings.ToLower(strings.TrimSpace(email))
-	if email == "" {
-		return VerifyResponse{}, fmt.Errorf("email is required")
+	return s.verifyEmailWithBaselineCache(ctx, email, user, map[string]*store.DomainBaseline{})
+}
+
+func (s *EmailVerificationService) VerifyEmailBatch(ctx context.Context, emails []string, user *store.User) ([]VerifyResponse, int) {
+	cache := map[string]*store.DomainBaseline{}
+	items := make([]VerifyResponse, 0, len(emails))
+	accepted := 0
+
+	for _, raw := range emails {
+		resp, err := s.verifyEmailWithBaselineCache(ctx, raw, user, cache)
+		if err != nil {
+			items = append(items, VerifyResponse{
+				Email:           strings.ToLower(strings.TrimSpace(raw)),
+				Classification:  "unknown",
+				ConfidenceScore: 0,
+				RiskLevel:       "high",
+				Deterministic:   false,
+				State:           "completed",
+				ReasonCodes:     []string{"verification_error"},
+				ProtocolSummary: err.Error(),
+				Cached:          false,
+			})
+			continue
+		}
+		items = append(items, resp)
+		accepted++
+	}
+
+	return items, accepted
+}
+
+func (s *EmailVerificationService) verifyEmailWithBaselineCache(ctx context.Context, rawEmail string, user *store.User, baselineCache map[string]*store.DomainBaseline) (VerifyResponse, error) {
+	email, domain, err := verifier.NormalizeEmail(rawEmail)
+	if err != nil {
+		now := time.Now().Unix()
+		rec := &store.VerificationRecord{
+			ID:              uuid.NewString(),
+			Email:           strings.ToLower(strings.TrimSpace(rawEmail)),
+			Domain:          domain,
+			Classification:  "undeliverable",
+			ConfidenceScore: 100,
+			RiskLevel:       "high",
+			Deterministic:   true,
+			State:           "completed",
+			ReasonCodes:     store.JSONStrings{"syntax_invalid"},
+			ProtocolSummary: err.Error(),
+			ExpiresAt:       now + int64(s.cfg.UndeliverableTTL.Seconds()),
+			LastVerifiedAt:  now,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}
+		return responseFromRecord(rec, false), nil
 	}
 
 	userID := ""
@@ -95,294 +154,229 @@ func (s *EmailVerificationService) VerifyEmail(ctx context.Context, email string
 		userID = user.ID
 	}
 
+	now := time.Now().Unix()
 	existing, err := s.repo.GetByEmailAndUser(ctx, email, userID)
 	if err != nil {
 		return VerifyResponse{}, err
 	}
-	if existing != nil {
+	if existing != nil && existing.ExpiresAt > now {
 		return responseFromRecord(existing, true), nil
 	}
 
-	now := time.Now().Unix()
-	directResult := s.verifier.Verify(email)
-	record := &store.VerificationRecord{
-		ID:             uuid.NewString(),
+	recordID := uuid.NewString()
+	createdAt := now
+	if existing != nil {
+		recordID = existing.ID
+		createdAt = existing.CreatedAt
+	}
+
+	rec := &store.VerificationRecord{
+		ID:             recordID,
 		Email:          email,
+		Domain:         domain,
 		UserID:         userID,
-		Status:         directResult.Status,
-		Message:        directResult.Message,
-		Source:         "direct-smtp-check",
-		FirstCheckedAt: now,
-		LastCheckedAt:  now,
-		CreatedAt:      now,
+		CreatedAt:      createdAt,
 		UpdatedAt:      now,
+		LastVerifiedAt: now,
 	}
 
-	// Use RequireProbe from verifier result, or fallback to status-based check
-	requiresFallback := directResult.RequireProbe || directResult.Status == "error" || directResult.Status == "unknown" || directResult.Status == "greylisted"
-	if requiresFallback {
-		token := uuid.NewString()
-		record.ProbeToken = token
-		record.Source = "smtp-probe"
-
-		accountID, err := s.probeSender.SendProbeForUser(ctx, email, token, userID)
-		if err != nil {
-			record.Status = "error"
-			record.Message = fmt.Sprintf("fallback probe send failed: %v", err)
-			record.Finalized = true
-		} else {
-			record.SMTPAccountID = accountID
-			record.Status = "pending_bounce_check"
-			record.Message = fmt.Sprintf("probe sent via smtp account %s; first IMAP bounce check scheduled in %s", accountID, s.cfg.FirstBounceDelay)
-			record.NextCheckAt = time.Now().Add(s.cfg.FirstBounceDelay).Unix()
-			record.Finalized = false
-		}
+	routing, resolveErr := s.verifier.Resolve(ctx, domain)
+	callouts := []store.VerificationCalloutAttempt{}
+	if resolveErr != nil {
+		rec.Classification = "undeliverable"
+		rec.ConfidenceScore = 100
+		rec.RiskLevel = "high"
+		rec.Deterministic = true
+		rec.State = "completed"
+		rec.ReasonCodes = store.JSONStrings{"dns_no_mail_routing"}
+		rec.ProtocolSummary = resolveErr.Error()
+		rec.ExpiresAt = now + int64(s.cfg.UndeliverableTTL.Seconds())
 	} else {
-		record.Finalized = true
+		target := s.verifier.CheckRecipient(ctx, routing, email)
+		callouts = append(callouts, toStoreAttempts(target.Attempts)...)
+
+		switch target.Outcome {
+		case "accepted":
+			baseline, baselineAttempts, err := s.getOrCreateBaseline(ctx, routing, baselineCache)
+			if err != nil {
+				rec.Classification = "unknown"
+				rec.ConfidenceScore = 40
+				rec.RiskLevel = "high"
+				rec.Deterministic = false
+				rec.State = "enriching"
+				rec.ReasonCodes = store.JSONStrings{"baseline_lookup_failed", "recipient_accepted"}
+				rec.ProtocolSummary = fmt.Sprintf("recipient accepted but baseline lookup failed: %v", err)
+				rec.ExpiresAt = now + int64(s.cfg.UnknownTTL.Seconds())
+			} else {
+				callouts = append(callouts, baselineAttempts...)
+				switch baseline.Classification {
+				case "reject_unknown":
+					rec.Classification = "deliverable"
+					rec.ConfidenceScore = 92
+					rec.RiskLevel = "low"
+					rec.Deterministic = true
+					rec.State = "completed"
+					rec.ReasonCodes = store.JSONStrings{"recipient_accepted", "control_recipient_rejected"}
+					rec.ProtocolSummary = fmt.Sprintf("recipient accepted by %s and control recipient rejected", baseline.SMTPHost)
+					rec.ExpiresAt = now + int64(s.cfg.DeliverableTTL.Seconds())
+				case "accept_all":
+					rec.Classification = "accept_all"
+					rec.ConfidenceScore = 35
+					rec.RiskLevel = "high"
+					rec.Deterministic = false
+					rec.State = "enriching"
+					rec.ReasonCodes = store.JSONStrings{"recipient_accepted", "control_recipient_accepted"}
+					rec.ProtocolSummary = fmt.Sprintf("recipient accepted by %s and domain baseline accepted a random control recipient", baseline.SMTPHost)
+					rec.ExpiresAt = now + int64(s.cfg.AcceptAllTTL.Seconds())
+				default:
+					rec.Classification = "unknown"
+					rec.ConfidenceScore = 40
+					rec.RiskLevel = "high"
+					rec.Deterministic = false
+					rec.State = "enriching"
+					rec.ReasonCodes = store.JSONStrings{"recipient_accepted", "control_recipient_inconclusive"}
+					rec.ProtocolSummary = "recipient accepted but control recipient baseline was inconclusive"
+					rec.ExpiresAt = now + int64(s.cfg.UnknownTTL.Seconds())
+				}
+			}
+		case "rejected":
+			rec.Classification = "undeliverable"
+			rec.ConfidenceScore = 100
+			rec.RiskLevel = "high"
+			rec.Deterministic = true
+			rec.State = "completed"
+			rec.ReasonCodes = store.JSONStrings{"hard_rcpt_reject"}
+			rec.ProtocolSummary = target.Message
+			rec.ExpiresAt = now + int64(s.cfg.UndeliverableTTL.Seconds())
+		case "policy":
+			rec.Classification = "unknown"
+			rec.ConfidenceScore = 30
+			rec.RiskLevel = "high"
+			rec.Deterministic = false
+			rec.State = "enriching"
+			rec.ReasonCodes = store.JSONStrings{"provider_policy_block"}
+			rec.ProtocolSummary = target.Message
+			rec.ExpiresAt = now + int64(s.cfg.UnknownTTL.Seconds())
+		case "tempfail":
+			rec.Classification = "unknown"
+			rec.ConfidenceScore = 25
+			rec.RiskLevel = "high"
+			rec.Deterministic = false
+			rec.State = "enriching"
+			rec.ReasonCodes = store.JSONStrings{"temporary_failure"}
+			rec.ProtocolSummary = target.Message
+			rec.ExpiresAt = now + int64(s.cfg.UnknownTTL.Seconds())
+		default:
+			rec.Classification = "unknown"
+			rec.ConfidenceScore = 20
+			rec.RiskLevel = "high"
+			rec.Deterministic = false
+			rec.State = "enriching"
+			rec.ReasonCodes = store.JSONStrings{"callout_error"}
+			rec.ProtocolSummary = target.Message
+			rec.ExpiresAt = now + int64(s.cfg.UnknownTTL.Seconds())
+		}
 	}
 
-	if err := s.repo.UpsertVerification(ctx, record); err != nil {
+	if err := s.repo.UpsertVerification(ctx, rec); err != nil {
 		return VerifyResponse{}, err
 	}
-	if err := s.repo.AddEvent(ctx, record.ID, "verify.requested", record.Status, record.Message); err != nil {
-		log.Printf("warning: failed to save event: %v", err)
+	if err := s.repo.ReplaceEnrichmentEvidence(ctx, rec.ID, nil); err != nil {
+		return VerifyResponse{}, err
+	}
+	if err := s.repo.AddCalloutAttempts(ctx, rec.ID, callouts); err != nil {
+		return VerifyResponse{}, err
 	}
 
-	webhookURL := ""
-	if user != nil && user.WebhookURL != "" {
-		webhookURL = user.WebhookURL
-	}
-	if err := s.webhook.SendWithURL(ctx, "verify.created", record, webhookURL); err != nil {
-		log.Printf("warning: webhook failed: %v", err)
-	}
-
-	return responseFromRecord(record, false), nil
-}
-
-func (s *EmailVerificationService) VerifyEmailBatch(ctx context.Context, emails []string, user *store.User) ([]VerifyResponse, int) {
-	responses := make([]VerifyResponse, 0, len(emails))
-	accepted := 0
-
-	for _, rawEmail := range emails {
-		email := strings.TrimSpace(rawEmail)
-		result, err := s.VerifyEmail(ctx, email, user)
-		if err != nil {
-			responses = append(responses, VerifyResponse{
-				Email:     strings.ToLower(email),
-				Status:    "error",
-				Message:   err.Error(),
-				Source:    "batch-api",
-				Cached:    false,
-				Finalized: true,
-			})
-			continue
+	if rec.State == "enriching" {
+		select {
+		case s.enrichmentQueue <- rec.ID:
+		default:
+			go func(id string) {
+				select {
+				case s.enrichmentQueue <- id:
+				case <-ctx.Done():
+				}
+			}(rec.ID)
 		}
-
-		responses = append(responses, result)
-		accepted++
 	}
 
-	return responses, accepted
+	return responseFromRecord(rec, false), nil
 }
 
-func (s *EmailVerificationService) CreateSMTPAccount(ctx context.Context, req SMTPAccountCreateRequest, userID string) (*store.SMTPAccount, error) {
-	req.Host = normalizeServerHost(req.Host)
-	req.Username = strings.TrimSpace(req.Username)
-	req.Sender = strings.TrimSpace(req.Sender)
-	req.IMAPHost = normalizeServerHost(req.IMAPHost)
-	req.IMAPMailbox = strings.TrimSpace(req.IMAPMailbox)
+func (s *EmailVerificationService) getOrCreateBaseline(ctx context.Context, routing verifier.MailRouting, cache map[string]*store.DomainBaseline) (*store.DomainBaseline, []store.VerificationCalloutAttempt, error) {
+	key := routing.Domain + "|" + routing.Fingerprint
+	now := time.Now().Unix()
 
-	if req.Host == "" || req.Username == "" || req.Password == "" || req.Sender == "" {
-		return nil, errors.New("host, username, password, and sender are required")
-	}
-	if req.IMAPHost == "" {
-		req.IMAPHost = inferIMAPHost(req.Host)
-	}
-	if req.Port == 0 {
-		req.Port = 587
-	}
-	if req.IMAPPort == 0 {
-		req.IMAPPort = 993
-	}
-	if req.IMAPMailbox == "" {
-		req.IMAPMailbox = "INBOX"
-	}
-	if req.DailyLimit <= 0 {
-		req.DailyLimit = 100
-	}
-	if err := validateServerHost("host", req.Host); err != nil {
-		return nil, err
-	}
-	if err := validateServerHost("imap_host", req.IMAPHost); err != nil {
-		return nil, err
-	}
-	if err := validatePort("port", req.Port); err != nil {
-		return nil, err
-	}
-	if err := validatePort("imap_port", req.IMAPPort); err != nil {
-		return nil, err
+	if baseline, ok := cache[key]; ok && baseline != nil && baseline.ExpiresAt > now {
+		return baseline, nil, nil
 	}
 
-	input := store.SMTPAccountInput{
-		ID:          uuid.NewString(),
-		UserID:      userID,
-		Host:        req.Host,
-		Port:        req.Port,
-		Username:    req.Username,
-		Password:    req.Password,
-		Sender:      req.Sender,
-		IMAPHost:    req.IMAPHost,
-		IMAPPort:    req.IMAPPort,
-		IMAPMailbox: req.IMAPMailbox,
-		DailyLimit:  req.DailyLimit,
-		Active:      true,
+	baseline, err := s.repo.GetDomainBaseline(ctx, routing.Domain, routing.Fingerprint, now)
+	if err != nil {
+		return nil, nil, err
 	}
-	if req.Active != nil {
-		input.Active = *req.Active
+	if baseline != nil {
+		cache[key] = baseline
+		return baseline, nil, nil
 	}
 
-	return s.repo.CreateSMTPAccount(ctx, input)
+	controlAddress := fmt.Sprintf("definitely-not-real-%s@%s", uuid.NewString()[:12], routing.Domain)
+	control := s.verifier.CheckRecipient(ctx, routing, controlAddress)
+	baseline = &store.DomainBaseline{
+		Domain:        routing.Domain,
+		MXFingerprint: routing.Fingerprint,
+		SampleAddress: controlAddress,
+		CheckedAt:     now,
+		ExpiresAt:     now + int64(s.cfg.DomainBaselineTTL.Seconds()),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if len(control.Attempts) > 0 {
+		last := control.Attempts[len(control.Attempts)-1]
+		baseline.SMTPHost = last.Host
+		baseline.SMTPCode = last.Code
+		baseline.SMTPMessage = last.Message
+	}
+
+	switch control.Outcome {
+	case "accepted":
+		baseline.Classification = "accept_all"
+	case "rejected":
+		baseline.Classification = "reject_unknown"
+	default:
+		baseline.Classification = "inconclusive"
+	}
+
+	if err := s.repo.UpsertDomainBaseline(ctx, baseline); err != nil {
+		return nil, nil, err
+	}
+	cache[key] = baseline
+
+	return baseline, toStoreAttempts(control.Attempts), nil
 }
 
-func (s *EmailVerificationService) ListSMTPAccounts(ctx context.Context, userID string) ([]store.SMTPAccount, error) {
-	if userID == "" {
-		return s.repo.ListSMTPAccounts(ctx)
+func (s *EmailVerificationService) enrichVerification(ctx context.Context, verificationID string) error {
+	record, err := s.repo.GetVerificationByID(ctx, verificationID)
+	if err != nil {
+		return err
 	}
-	return s.repo.ListSMTPAccountsByUser(ctx, userID)
-}
-
-func (s *EmailVerificationService) CreateEmailTemplate(ctx context.Context, req EmailTemplateCreateRequest, userID string) (*store.EmailTemplate, error) {
-	req.Name = strings.TrimSpace(req.Name)
-	req.SubjectTemplate = strings.TrimSpace(req.SubjectTemplate)
-	req.BodyTemplate = strings.TrimSpace(req.BodyTemplate)
-	if req.Name == "" || req.SubjectTemplate == "" || req.BodyTemplate == "" {
-		return nil, errors.New("name, subject_template, and body_template are required")
+	if record == nil || record.State != "enriching" {
+		return nil
 	}
 
-	active := true
-	if req.Active != nil {
-		active = *req.Active
+	result, err := s.enricher.Enrich(ctx, record)
+	if err != nil {
+		return err
 	}
 
-	input := store.EmailTemplateInput{
-		ID:              uuid.NewString(),
-		UserID:          userID,
-		Name:            req.Name,
-		SubjectTemplate: req.SubjectTemplate,
-		BodyTemplate:    req.BodyTemplate,
-		Active:          active,
+	if err := s.repo.ReplaceEnrichmentEvidence(ctx, record.ID, result.Evidence); err != nil {
+		return err
 	}
-
-	return s.repo.CreateEmailTemplate(ctx, input)
-}
-
-func (s *EmailVerificationService) ListEmailTemplates(ctx context.Context, userID string) ([]store.EmailTemplate, error) {
-	if userID == "" {
-		return s.repo.ListEmailTemplates(ctx)
+	if err := s.repo.UpdateVerificationEnrichment(ctx, record.ID, result.ConfidenceScore, result.RiskLevel, "completed", result.Summary); err != nil {
+		return err
 	}
-	return s.repo.ListEmailTemplatesByUser(ctx, userID)
-}
-
-func (s *EmailVerificationService) GetEmailTemplate(ctx context.Context, id string) (*store.EmailTemplate, error) {
-	return s.repo.GetEmailTemplateByID(ctx, id)
-}
-
-func (s *EmailVerificationService) UpdateEmailTemplate(ctx context.Context, id string, req EmailTemplateCreateRequest, userID string) (*store.EmailTemplate, error) {
-	req.Name = strings.TrimSpace(req.Name)
-	req.SubjectTemplate = strings.TrimSpace(req.SubjectTemplate)
-	req.BodyTemplate = strings.TrimSpace(req.BodyTemplate)
-	if req.Name == "" || req.SubjectTemplate == "" || req.BodyTemplate == "" {
-		return nil, errors.New("name, subject_template, and body_template are required")
-	}
-
-	active := true
-	if req.Active != nil {
-		active = *req.Active
-	}
-
-	input := store.EmailTemplateInput{
-		ID:              id,
-		UserID:          userID,
-		Name:            req.Name,
-		SubjectTemplate: req.SubjectTemplate,
-		BodyTemplate:    req.BodyTemplate,
-		Active:          active,
-	}
-
-	return s.repo.UpdateEmailTemplate(ctx, id, input)
-}
-
-func (s *EmailVerificationService) DeleteEmailTemplate(ctx context.Context, id string) error {
-	return s.repo.DeleteEmailTemplate(ctx, id)
-}
-
-func (s *EmailVerificationService) GetSMTPAccount(ctx context.Context, id string) (*store.SMTPAccount, error) {
-	return s.repo.GetSMTPAccountByID(ctx, id)
-}
-
-func (s *EmailVerificationService) UpdateSMTPAccount(ctx context.Context, id string, req SMTPAccountCreateRequest, userID string) (*store.SMTPAccount, error) {
-	req.Host = normalizeServerHost(req.Host)
-	req.Username = strings.TrimSpace(req.Username)
-	req.Sender = strings.TrimSpace(req.Sender)
-	req.IMAPHost = normalizeServerHost(req.IMAPHost)
-	req.IMAPMailbox = strings.TrimSpace(req.IMAPMailbox)
-
-	if req.Host == "" || req.Username == "" || req.Sender == "" {
-		return nil, errors.New("host, username, and sender are required")
-	}
-	if req.IMAPHost == "" {
-		req.IMAPHost = inferIMAPHost(req.Host)
-	}
-	if req.Port == 0 {
-		req.Port = 587
-	}
-	if req.IMAPPort == 0 {
-		req.IMAPPort = 993
-	}
-	if req.IMAPMailbox == "" {
-		req.IMAPMailbox = "INBOX"
-	}
-	if req.DailyLimit <= 0 {
-		req.DailyLimit = 100
-	}
-	if err := validateServerHost("host", req.Host); err != nil {
-		return nil, err
-	}
-	if err := validateServerHost("imap_host", req.IMAPHost); err != nil {
-		return nil, err
-	}
-	if err := validatePort("port", req.Port); err != nil {
-		return nil, err
-	}
-	if err := validatePort("imap_port", req.IMAPPort); err != nil {
-		return nil, err
-	}
-
-	active := true
-	if req.Active != nil {
-		active = *req.Active
-	}
-
-	input := store.SMTPAccountInput{
-		ID:          id,
-		UserID:      userID,
-		Host:        req.Host,
-		Port:        req.Port,
-		Username:    req.Username,
-		Password:    req.Password,
-		Sender:      req.Sender,
-		IMAPHost:    req.IMAPHost,
-		IMAPPort:    req.IMAPPort,
-		IMAPMailbox: req.IMAPMailbox,
-		DailyLimit:  req.DailyLimit,
-		Active:      active,
-	}
-
-	return s.repo.UpdateSMTPAccount(ctx, id, input)
-}
-
-func (s *EmailVerificationService) DeleteSMTPAccount(ctx context.Context, id string) error {
-	return s.repo.DeleteSMTPAccount(ctx, id)
+	return nil
 }
 
 func (s *EmailVerificationService) ListVerifications(ctx context.Context, userID string, limit, offset int) ([]store.VerificationRecord, error) {
@@ -393,6 +387,30 @@ func (s *EmailVerificationService) GetVerification(ctx context.Context, id strin
 	return s.repo.GetVerificationByID(ctx, id)
 }
 
+func (s *EmailVerificationService) GetVerificationDetail(ctx context.Context, id string) (*VerifyResponse, error) {
+	record, err := s.repo.GetVerificationByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if record == nil {
+		return nil, nil
+	}
+
+	evidence, err := s.repo.ListEnrichmentEvidence(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	callouts, err := s.repo.ListCalloutAttempts(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := responseFromRecord(record, false)
+	resp.Evidence = evidence
+	resp.Callouts = callouts
+	return &resp, nil
+}
+
 func (s *EmailVerificationService) GetVerificationStats(ctx context.Context, userID string) (map[string]int, error) {
 	return s.repo.GetVerificationStats(ctx, userID)
 }
@@ -401,170 +419,7 @@ func (s *EmailVerificationService) ListAllVerifications(ctx context.Context, lim
 	return s.repo.ListAllVerifications(ctx, limit, offset)
 }
 
-func (s *EmailVerificationService) StartScheduler(ctx context.Context) {
-	if count, err := s.repo.ResetSMTPDailyUsage(ctx); err != nil {
-		log.Printf("warning: initial smtp daily reset failed: %v", err)
-	} else if count > 0 {
-		log.Printf("info: initial reset of smtp daily usage counters for %d account(s)", count)
-	}
-
-	bounceTicker := time.NewTicker(s.cfg.CheckInterval)
-	defer bounceTicker.Stop()
-
-	dailyResetTicker := time.NewTicker(24 * time.Hour)
-	defer dailyResetTicker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-dailyResetTicker.C:
-			if count, err := s.repo.ResetSMTPDailyUsage(ctx); err != nil {
-				log.Printf("warning: smtp daily reset failed: %v", err)
-			} else if count > 0 {
-				log.Printf("info: reset smtp daily usage counters for %d account(s)", count)
-			}
-		case <-bounceTicker.C:
-			if err := s.ProcessDueChecks(ctx); err != nil {
-				log.Printf("warning: process due checks failed: %v", err)
-			}
-		}
-	}
-}
-
-func (s *EmailVerificationService) ProcessDueChecks(ctx context.Context) error {
-	now := time.Now().Unix()
-	due, err := s.repo.ListDueChecks(ctx, now, 100)
-	if err != nil {
-		return err
-	}
-
-	for i := range due {
-		rec := due[i]
-		if err := s.processOneDue(ctx, &rec); err != nil {
-			log.Printf("warning: process due check failed for %s: %v", rec.Email, err)
-		}
-	}
-
-	return nil
-}
-
-func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store.VerificationRecord) error {
-	if rec.SMTPAccountID == "" {
-		return fmt.Errorf("missing smtp account reference on verification record")
-	}
-
-	account, err := s.repo.GetSMTPAccountByID(ctx, rec.SMTPAccountID)
-	if err != nil {
-		return err
-	}
-	if account == nil {
-		return fmt.Errorf("smtp account not found: %s", rec.SMTPAccountID)
-	}
-
-	imapHost := normalizeServerHost(account.IMAPHost)
-	if imapHost == "" {
-		imapHost = inferIMAPHost(account.Host)
-	}
-
-	bounced, reason, err := s.bounceChecker.HasBounce(ctx, IMAPConfig{
-		Host:     imapHost,
-		Port:     account.IMAPPort,
-		Username: account.Username,
-		Password: account.Password,
-		Mailbox:  account.IMAPMailbox,
-	}, rec.Email, rec.ProbeToken)
-
-	now := time.Now().Unix()
-	checkNumber := rec.CheckCount + 1
-	rec.LastCheckedAt = now
-	rec.UpdatedAt = now
-	rec.CheckCount++
-
-	event := "verify.check.first.no_bounce"
-	if checkNumber >= 2 {
-		event = "verify.check.second.no_bounce"
-	}
-
-	if err != nil {
-		if checkNumber == 1 {
-			rec.Status = "error"
-			rec.Message = fmt.Sprintf("first IMAP bounce check failed: %v; second check will still run", err)
-			rec.NextCheckAt = time.Now().Add(s.cfg.SecondBounceDelay).Unix()
-			rec.Finalized = false
-			event = "verify.check.first.error"
-		} else {
-			rec.Status = "error"
-			rec.Message = fmt.Sprintf("second IMAP bounce check failed: %v", err)
-			rec.NextCheckAt = 0
-			rec.Finalized = true
-			event = "verify.check.second.error"
-		}
-	} else if bounced {
-		rec.Status = "bounced"
-		rec.Message = reason
-		rec.NextCheckAt = 0
-		rec.Finalized = true
-		event = "verify.bounced"
-	} else {
-		if checkNumber == 1 {
-			rec.Status = "valid"
-			rec.Message = "no bounce detected in first IMAP check; second check scheduled"
-			rec.NextCheckAt = time.Now().Add(s.cfg.SecondBounceDelay).Unix()
-			rec.Finalized = false
-			event = "verify.check.first.no_bounce"
-		} else {
-			rec.Status = "valid"
-			rec.Message = "no bounce detected in second IMAP check"
-			rec.NextCheckAt = 0
-			rec.Finalized = true
-			event = "verify.check.second.no_bounce"
-		}
-	}
-
-	if err := s.repo.UpsertVerification(ctx, rec); err != nil {
-		return err
-	}
-	if err := s.repo.AddEvent(ctx, rec.ID, event, rec.Status, rec.Message); err != nil {
-		log.Printf("warning: failed to save event: %v", err)
-	}
-
-	// Get user webhook URL if user exists
-	webhookURL := ""
-	if rec.UserID != "" {
-		user, err := s.repo.GetUserByID(ctx, rec.UserID)
-		if err == nil && user != nil && user.WebhookURL != "" {
-			webhookURL = user.WebhookURL
-		}
-	}
-	if err := s.webhook.SendWithURL(ctx, event, rec, webhookURL); err != nil {
-		log.Printf("warning: webhook failed: %v", err)
-	}
-
-	return nil
-}
-
-func responseFromRecord(rec *store.VerificationRecord, cached bool) VerifyResponse {
-	resp := VerifyResponse{
-		ID:        rec.ID,
-		Email:     rec.Email,
-		Status:    rec.Status,
-		Message:   rec.Message,
-		Source:    rec.Source,
-		Cached:    cached,
-		Finalized: rec.Finalized,
-	}
-	if rec.NextCheckAt > 0 {
-		resp.NextCheckAt = rec.NextCheckAt
-	}
-	return resp
-}
-
 func (s *EmailVerificationService) DeleteVerificationForUser(ctx context.Context, id, userID string) error {
-	if strings.TrimSpace(id) == "" {
-		return errors.New("verification id is required")
-	}
-
 	record, err := s.repo.GetVerificationByID(ctx, id)
 	if err != nil {
 		return err
@@ -575,7 +430,6 @@ func (s *EmailVerificationService) DeleteVerificationForUser(ctx context.Context
 	if record.UserID != userID {
 		return ErrVerificationForbidden
 	}
-
 	return s.repo.DeleteVerification(ctx, id)
 }
 
@@ -583,19 +437,39 @@ func (s *EmailVerificationService) AdminDeleteVerification(ctx context.Context, 
 	return s.repo.DeleteVerification(ctx, id)
 }
 
-func (s *EmailVerificationService) SendTestWebhook(ctx context.Context, webhookURL string) error {
-	now := time.Now().Unix()
-	testRecord := &store.VerificationRecord{
-		ID:             "test-" + uuid.NewString()[:8],
-		Email:          "test@example.com",
-		Status:         "valid",
-		Message:        "This is a test webhook notification",
-		Source:         "test",
-		FirstCheckedAt: now,
-		LastCheckedAt:  now,
-		Finalized:      true,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+func responseFromRecord(rec *store.VerificationRecord, cached bool) VerifyResponse {
+	return VerifyResponse{
+		ID:                rec.ID,
+		Email:             rec.Email,
+		Domain:            rec.Domain,
+		Classification:    rec.Classification,
+		ConfidenceScore:   rec.ConfidenceScore,
+		RiskLevel:         rec.RiskLevel,
+		Deterministic:     rec.Deterministic,
+		State:             rec.State,
+		ReasonCodes:       append([]string(nil), rec.ReasonCodes...),
+		ProtocolSummary:   rec.ProtocolSummary,
+		EnrichmentSummary: rec.EnrichmentSummary,
+		ExpiresAt:         rec.ExpiresAt,
+		LastVerifiedAt:    rec.LastVerifiedAt,
+		LastEnrichedAt:    rec.LastEnrichedAt,
+		Cached:            cached,
 	}
-	return s.webhook.SendWithURL(ctx, "test.webhook", testRecord, webhookURL)
+}
+
+func toStoreAttempts(attempts []verifier.CalloutAttempt) []store.VerificationCalloutAttempt {
+	items := make([]store.VerificationCalloutAttempt, 0, len(attempts))
+	for _, attempt := range attempts {
+		items = append(items, store.VerificationCalloutAttempt{
+			SMTPHost:    attempt.Host,
+			SMTPPort:    attempt.Port,
+			Stage:       attempt.Stage,
+			Recipient:   attempt.Recipient,
+			Outcome:     attempt.Outcome,
+			SMTPCode:    attempt.Code,
+			SMTPMessage: attempt.Message,
+			DurationMS:  attempt.DurationMS,
+		})
+	}
+	return items
 }

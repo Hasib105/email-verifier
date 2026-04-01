@@ -18,27 +18,22 @@ services:
       - verifier-net
     restart: unless-stopped
 
-  tor:
-    image: ${GHCR_IMAGE_PREFIX:-ghcr.io/hasib105/email-verifier}-tor:latest
-    networks:
-      - verifier-net
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "nc -z 127.0.0.1 9050 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
   api:
     image: ${GHCR_IMAGE_PREFIX:-ghcr.io/hasib105/email-verifier}-api:latest
     ports:
       - "3000:3000"
     environment:
       - PORT=3000
-      - API_KEY=${API_KEY}
-      - TOR_SOCKS_ADDR=tor:9050
-      - MAX_CONCURRENCY=${MAX_CONCURRENCY:-5}
+      - MAX_CONCURRENCY=${MAX_CONCURRENCY:-10}
+      - TIMEOUT=${TIMEOUT:-20s}
+      - VERIFIER_MAIL_FROM=${VERIFIER_MAIL_FROM:-verify@verifier.local}
+      - VERIFIER_EHLO_DOMAIN=${VERIFIER_EHLO_DOMAIN:-verifier.local}
+      - DELIVERABLE_TTL=${DELIVERABLE_TTL:-168h}
+      - UNDELIVERABLE_TTL=${UNDELIVERABLE_TTL:-24h}
+      - ACCEPT_ALL_TTL=${ACCEPT_ALL_TTL:-24h}
+      - UNKNOWN_TTL=${UNKNOWN_TTL:-6h}
+      - DOMAIN_BASELINE_TTL=${DOMAIN_BASELINE_TTL:-24h}
+      - ENRICHMENT_WORKERS=${ENRICHMENT_WORKERS:-2}
       - DB_HOST=${DB_HOST:-postgres}
       - DB_PORT=${DB_PORT:-15432}
       - DB_USER=${DB_USER:-${POSTGRES_USER:-postgres}}
@@ -46,15 +41,8 @@ services:
       - DB_NAME=${DB_NAME:-${POSTGRES_DB:-verifier}}
       - DB_SSLMODE=${DB_SSLMODE:-disable}
       - DATABASE_DSN=${DATABASE_DSN:-}
-      - WEBHOOK_URL=${WEBHOOK_URL:-}
-      - WEBHOOK_TIMEOUT=${WEBHOOK_TIMEOUT:-10s}
-      - CHECK_INTERVAL=${CHECK_INTERVAL:-1m}
-      - FIRST_BOUNCE_DELAY=${FIRST_BOUNCE_DELAY:-1m}
-      - SECOND_BOUNCE_DELAY=${SECOND_BOUNCE_DELAY:-6h}
     depends_on:
       postgres:
-        condition: service_healthy
-      tor:
         condition: service_healthy
     networks:
       - verifier-net

@@ -1,251 +1,298 @@
 package verifier
 
 import (
+	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
+	"net/mail"
 	"net/smtp"
 	"net/textproto"
-	"regexp"
+	"sort"
 	"strings"
 	"time"
-
-	"golang.org/x/net/proxy"
 )
 
-type VerifyResult struct {
-	Status       string `json:"status"` // valid, invalid, unknown, greylisted, disposable, error
-	Message      string `json:"message"`
-	Email        string `json:"email"`
-	RequireProbe bool   `json:"require_probe"` // true if EHLO check was denied and needs probe fallback
+type MailRouting struct {
+	Domain        string
+	Hosts         []string
+	Fingerprint   string
+	UsedAFallback bool
+}
+
+type CalloutAttempt struct {
+	Host       string
+	Port       int
+	Stage      string
+	Recipient  string
+	Outcome    string
+	Code       int
+	Message    string
+	DurationMS int64
+}
+
+type RecipientCheckResult struct {
+	Outcome  string
+	Code     int
+	Message  string
+	Attempts []CalloutAttempt
 }
 
 type EmailVerifier struct {
-	FromEmail  string
-	EHLODomain string
-	Timeout    time.Duration
-	ProxyAddr  string
-	Semaphore  chan struct{}
+	MailFrom      string
+	EHLODomain    string
+	Timeout       time.Duration
+	Semaphore     chan struct{}
+	Resolver      DNSResolver
+	CalloutEngine CalloutEngine
 }
 
-func New(fromEmail, ehloDomain, proxyAddr string, maxConcurrency int, timeout time.Duration) *EmailVerifier {
+type DNSResolver interface {
+	LookupMX(ctx context.Context, domain string) ([]*net.MX, error)
+	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
+}
+
+type CalloutEngine interface {
+	CheckRecipient(ctx context.Context, routing MailRouting, mailFrom, ehloDomain, recipient string) RecipientCheckResult
+}
+
+type NetResolver struct{}
+
+func (NetResolver) LookupMX(ctx context.Context, domain string) ([]*net.MX, error) {
+	return net.DefaultResolver.LookupMX(ctx, domain)
+}
+
+func (NetResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return net.DefaultResolver.LookupIPAddr(ctx, host)
+}
+
+type SMTPDialer struct {
+	Timeout time.Duration
+}
+
+func New(mailFrom, ehloDomain string, maxConcurrency int, timeout time.Duration) *EmailVerifier {
+	if maxConcurrency <= 0 {
+		maxConcurrency = 5
+	}
 	return &EmailVerifier{
-		FromEmail:  fromEmail,
-		EHLODomain: ehloDomain,
-		ProxyAddr:  proxyAddr,
-		Timeout:    timeout,
-		Semaphore:  make(chan struct{}, maxConcurrency),
+		MailFrom:      mailFrom,
+		EHLODomain:    ehloDomain,
+		Timeout:       timeout,
+		Semaphore:     make(chan struct{}, maxConcurrency),
+		Resolver:      NetResolver{},
+		CalloutEngine: SMTPDialer{Timeout: timeout},
 	}
 }
 
-// isStrictProvider returns true if the domain is known to reject EHLO-based verification
-func isStrictProvider(mx string) bool {
-	strictPatterns := []string{
-		"google.com",
-		"googlemail.com",
-		"gmail-smtp-in.l.google.com",
-		"outlook.com",
-		"hotmail.com",
-		"microsoft.com",
-		"protection.outlook.com",
-		"mail.protection.outlook.com",
-		"yahoo.com",
-		"yahoodns.net",
-		"icloud.com",
-		"me.com",
-		"apple.com",
+func NormalizeEmail(raw string) (string, string, error) {
+	email := strings.ToLower(strings.TrimSpace(raw))
+	if email == "" {
+		return "", "", errors.New("email is required")
 	}
-	mxLower := strings.ToLower(mx)
-	for _, pattern := range strictPatterns {
-		if strings.Contains(mxLower, pattern) {
-			return true
-		}
+
+	parsed, err := mail.ParseAddress(email)
+	if err != nil || !strings.EqualFold(parsed.Address, email) {
+		return "", "", errors.New("invalid syntax")
 	}
-	return false
+
+	local, domain, ok := strings.Cut(email, "@")
+	if !ok || local == "" || domain == "" {
+		return "", "", errors.New("invalid syntax")
+	}
+	if len(local) > 64 || len(domain) > 253 {
+		return "", "", errors.New("invalid syntax")
+	}
+	if strings.HasPrefix(local, ".") || strings.HasSuffix(local, ".") || strings.Contains(local, "..") {
+		return "", "", errors.New("invalid syntax")
+	}
+	if strings.ContainsAny(domain, " /\\") {
+		return "", "", errors.New("invalid syntax")
+	}
+
+	return email, domain, nil
 }
 
-// isEHLODeniedError checks if the error message indicates EHLO-based verification was blocked
-func isEHLODeniedError(msg string) bool {
-	deniedPatterns := []string{
-		"cannot verify user",
-		"try again later",
-		"rate limit",
-		"too many",
-		"temporarily deferred",
-		"service unavailable",
-		"authentication required",
-		"relay access denied",
-		"sender verify failed",
-		"550 5.7",
-		"421 4.7",
-		"450 4.2",
-		"451 4.7",
-	}
-	msgLower := strings.ToLower(msg)
-	for _, pattern := range deniedPatterns {
-		if strings.Contains(msgLower, pattern) {
-			return true
-		}
-	}
-	return false
-}
-
-func (v *EmailVerifier) Verify(email string) VerifyResult {
-	// Acquire semaphore (limit concurrent Tor connections)
+func (v *EmailVerifier) Resolve(ctx context.Context, domain string) (MailRouting, error) {
 	v.Semaphore <- struct{}{}
 	defer func() { <-v.Semaphore }()
 
-	email = strings.ToLower(strings.TrimSpace(email))
-	res := VerifyResult{Email: email}
+	mxs, err := v.Resolver.LookupMX(ctx, domain)
+	if err == nil && len(mxs) > 0 {
+		sort.Slice(mxs, func(i, j int) bool {
+			if mxs[i].Pref == mxs[j].Pref {
+				return mxs[i].Host < mxs[j].Host
+			}
+			return mxs[i].Pref < mxs[j].Pref
+		})
 
-	if !isValidEmailSyntax(email) {
-		res.Status = "invalid"
-		res.Message = "invalid syntax"
-		return res
+		hosts := make([]string, 0, len(mxs))
+		for _, mx := range mxs {
+			host := strings.TrimSuffix(strings.ToLower(mx.Host), ".")
+			if host != "" {
+				hosts = append(hosts, host)
+			}
+		}
+		if len(hosts) > 0 {
+			return MailRouting{
+				Domain:      domain,
+				Hosts:       hosts,
+				Fingerprint: strings.Join(hosts, ","),
+			}, nil
+		}
 	}
 
-	if isDisposableDomain(strings.Split(email, "@")[1]) {
-		res.Status = "disposable"
-		res.Message = "disposable domain detected"
-		return res
+	if _, ipErr := v.Resolver.LookupIPAddr(ctx, domain); ipErr == nil {
+		return MailRouting{
+			Domain:        domain,
+			Hosts:         []string{domain},
+			Fingerprint:   domain,
+			UsedAFallback: true,
+		}, nil
 	}
 
-	domain := strings.Split(email, "@")[1]
-	mxs, err := net.LookupMX(domain)
-	if err != nil || len(mxs) == 0 {
-		res.Status = "invalid"
-		res.Message = "no MX records"
-		return res
-	}
-
-	mx := strings.TrimSuffix(mxs[0].Host, ".")
-
-	// Check if this is a strict provider that blocks EHLO verification
-	if isStrictProvider(mx) {
-		res.Status = "unknown"
-		res.Message = fmt.Sprintf("strict provider detected (%s); requires probe-based verification", mx)
-		res.RequireProbe = true
-		return res
-	}
-
-	conn, err := v.dialSMTP(mx)
 	if err != nil {
-		res.Status = "error"
-		res.Message = fmt.Sprintf("connection failed: %v", err)
-		res.RequireProbe = true
-		return res
+		return MailRouting{}, fmt.Errorf("resolve mail routing: %w", err)
+	}
+	return MailRouting{}, fmt.Errorf("resolve mail routing: no MX or A/AAAA records")
+}
+
+func (v *EmailVerifier) CheckRecipient(ctx context.Context, routing MailRouting, recipient string) RecipientCheckResult {
+	v.Semaphore <- struct{}{}
+	defer func() { <-v.Semaphore }()
+	return v.CalloutEngine.CheckRecipient(ctx, routing, v.MailFrom, v.EHLODomain, recipient)
+}
+
+func (d SMTPDialer) CheckRecipient(ctx context.Context, routing MailRouting, mailFrom, ehloDomain, recipient string) RecipientCheckResult {
+	result := RecipientCheckResult{
+		Outcome: "error",
+		Message: "no SMTP hosts attempted",
+	}
+
+	for _, host := range routing.Hosts {
+		attempt := d.callHost(ctx, host, mailFrom, ehloDomain, recipient)
+		result.Attempts = append(result.Attempts, attempt)
+
+		switch attempt.Outcome {
+		case "accepted":
+			return RecipientCheckResult{
+				Outcome:  "accepted",
+				Code:     attempt.Code,
+				Message:  attempt.Message,
+				Attempts: result.Attempts,
+			}
+		case "rejected":
+			return RecipientCheckResult{
+				Outcome:  "rejected",
+				Code:     attempt.Code,
+				Message:  attempt.Message,
+				Attempts: result.Attempts,
+			}
+		case "policy":
+			result.Outcome = "policy"
+			result.Code = attempt.Code
+			result.Message = attempt.Message
+		case "tempfail":
+			if result.Outcome == "error" {
+				result.Outcome = "tempfail"
+				result.Code = attempt.Code
+				result.Message = attempt.Message
+			}
+		default:
+			if result.Message == "no SMTP hosts attempted" {
+				result.Message = attempt.Message
+			}
+		}
+	}
+
+	return result
+}
+
+func (d SMTPDialer) callHost(ctx context.Context, host, mailFrom, ehloDomain, recipient string) CalloutAttempt {
+	start := time.Now()
+	attempt := CalloutAttempt{
+		Host:      host,
+		Port:      25,
+		Stage:     "connect",
+		Recipient: recipient,
+		Outcome:   "error",
+	}
+
+	dialer := &net.Dialer{Timeout: d.Timeout}
+	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, "25"))
+	if err != nil {
+		attempt.Message = err.Error()
+		attempt.DurationMS = time.Since(start).Milliseconds()
+		return attempt
 	}
 	defer conn.Close()
 
-	client, err := smtp.NewClient(conn, mx)
+	client, err := smtp.NewClient(conn, host)
 	if err != nil {
-		res.Status = "error"
-		res.Message = err.Error()
-		res.RequireProbe = true
-		return res
+		attempt.Message = err.Error()
+		attempt.DurationMS = time.Since(start).Milliseconds()
+		return attempt
 	}
 	defer client.Close()
 
-	if err := client.Hello(v.EHLODomain); err != nil {
-		res.Status = "error"
-		res.Message = "EHLO failed"
-		res.RequireProbe = true
-		return res
+	attempt.Stage = "ehlo"
+	if err := client.Hello(ehloDomain); err != nil {
+		attempt.Outcome, attempt.Code, attempt.Message = classifySMTPErr(err, "EHLO failed")
+		attempt.DurationMS = time.Since(start).Milliseconds()
+		return attempt
 	}
 
 	if ok, _ := client.Extension("STARTTLS"); ok {
-		tlsConfig := &tls.Config{ServerName: mx, InsecureSkipVerify: false}
-		_ = client.StartTLS(tlsConfig) // Ignore error, continue if fails
-		client.Hello(v.EHLODomain)
+		_ = client.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12})
+		_ = client.Hello(ehloDomain)
 	}
 
-	if err := client.Mail(v.FromEmail); err != nil {
-		errMsg := err.Error()
-		if isEHLODeniedError(errMsg) {
-			res.Status = "unknown"
-			res.Message = fmt.Sprintf("MAIL FROM rejected; probe required: %s", errMsg)
-			res.RequireProbe = true
-		} else {
-			res.Status = "error"
-			res.Message = fmt.Sprintf("MAIL FROM rejected: %s", errMsg)
-			res.RequireProbe = true
-		}
-		return res
+	attempt.Stage = "mail_from"
+	if err := client.Mail(mailFrom); err != nil {
+		attempt.Outcome, attempt.Code, attempt.Message = classifySMTPErr(err, "MAIL FROM rejected")
+		attempt.DurationMS = time.Since(start).Milliseconds()
+		return attempt
 	}
 
-	rcptErr := client.Rcpt(email)
-	if rcptErr == nil {
-		res.Status = "valid"
-		res.Message = "250 Accepted"
-		return res
+	attempt.Stage = "rcpt_to"
+	if err := client.Rcpt(recipient); err != nil {
+		attempt.Outcome, attempt.Code, attempt.Message = classifySMTPErr(err, "RCPT TO rejected")
+		attempt.DurationMS = time.Since(start).Milliseconds()
+		return attempt
 	}
 
-	// Parse Error Codes
-	if smtpErr, ok := rcptErr.(*textproto.Error); ok {
-		errMsg := fmt.Sprintf("%d %s", smtpErr.Code, smtpErr.Msg)
-
-		// Check if this is an EHLO denial that needs probe fallback
-		if isEHLODeniedError(smtpErr.Msg) {
-			res.Status = "unknown"
-			res.Message = errMsg
-			res.RequireProbe = true
-			return res
-		}
-
-		if smtpErr.Code >= 550 && smtpErr.Code <= 559 {
-			res.Status = "invalid"
-			res.Message = errMsg
-		} else if smtpErr.Code == 450 || smtpErr.Code == 451 || smtpErr.Code == 452 {
-			res.Status = "greylisted"
-			res.Message = errMsg
-			res.RequireProbe = true
-		} else if smtpErr.Code >= 400 && smtpErr.Code < 500 {
-			res.Status = "unknown"
-			res.Message = errMsg
-			res.RequireProbe = true
-		} else {
-			res.Status = "unknown"
-			res.Message = errMsg
-			res.RequireProbe = true
-		}
-	} else {
-		res.Status = "unknown"
-		res.Message = rcptErr.Error()
-		res.RequireProbe = true
-	}
-
-	return res
+	attempt.Outcome = "accepted"
+	attempt.Code = 250
+	attempt.Message = "recipient accepted"
+	attempt.DurationMS = time.Since(start).Milliseconds()
+	return attempt
 }
 
-func (v *EmailVerifier) dialSMTP(host string) (net.Conn, error) {
-	addr := net.JoinHostPort(host, "25")
-
-	// If no proxy configured, use direct (not recommended for privacy)
-	if v.ProxyAddr == "" {
-		d := &net.Dialer{Timeout: v.Timeout}
-		return d.Dial("tcp", addr)
+func classifySMTPErr(err error, fallback string) (string, int, string) {
+	if err == nil {
+		return "accepted", 250, "recipient accepted"
 	}
 
-	// SOCKS5 Dialer (Tor) - All connections go through Tor for anonymity
-	dialer, err := proxy.SOCKS5("tcp", v.ProxyAddr, nil, proxy.Direct)
-	if err != nil {
-		return nil, err
+	msg := err.Error()
+	if smtpErr, ok := err.(*textproto.Error); ok {
+		code := smtpErr.Code
+		text := strings.TrimSpace(smtpErr.Msg)
+		switch {
+		case code >= 500 && code <= 559:
+			if strings.Contains(text, "5.7") || strings.Contains(strings.ToLower(text), "policy") || strings.Contains(strings.ToLower(text), "access denied") {
+				return "policy", code, fmt.Sprintf("%d %s", code, text)
+			}
+			return "rejected", code, fmt.Sprintf("%d %s", code, text)
+		case code >= 400 && code <= 499:
+			return "tempfail", code, fmt.Sprintf("%d %s", code, text)
+		default:
+			return "error", code, fmt.Sprintf("%d %s", code, text)
+		}
 	}
-	return dialer.Dial("tcp", addr)
-}
 
-func isValidEmailSyntax(email string) bool {
-	const pattern = `^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`
-	re := regexp.MustCompile(pattern)
-	return re.MatchString(email)
-}
-
-func isDisposableDomain(domain string) bool {
-	// Expand this list in production
-	disposables := map[string]bool{
-		"mailinator.com": true, "yopmail.com": true, "10minutemail.com": true,
-		"guerrillamail.com": true, "tempmail.com": true, "throwaway.email": true,
-		"temp-mail.org": true, "fakeinbox.com": true, "getnada.com": true,
+	if strings.Contains(strings.ToLower(msg), "timeout") {
+		return "tempfail", 0, msg
 	}
-	return disposables[domain]
+
+	return "error", 0, fmt.Sprintf("%s: %s", fallback, msg)
 }

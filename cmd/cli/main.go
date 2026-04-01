@@ -183,14 +183,25 @@ func runSignup() {
 		os.Exit(1)
 	}
 
-	// Get webhook URL (optional)
-	fmt.Print("Enter webhook URL (optional, press Enter to skip): ")
-	webhookURL, err := reader.ReadString('\n')
+	password, err := readPassword("Enter password: ")
 	if err != nil {
-		fmt.Printf("Error reading input: %v\n", err)
+		fmt.Printf("Error reading password: %v\n", err)
 		os.Exit(1)
 	}
-	webhookURL = strings.TrimSpace(webhookURL)
+	if len(password) < 6 {
+		fmt.Println("Password must be at least 6 characters")
+		os.Exit(1)
+	}
+
+	confirmPassword, err := readPassword("Confirm password: ")
+	if err != nil {
+		fmt.Printf("Error reading password: %v\n", err)
+		os.Exit(1)
+	}
+	if password != confirmPassword {
+		fmt.Println("Passwords do not match")
+		os.Exit(1)
+	}
 
 	// Connect to database
 	cfg := config.Load()
@@ -206,9 +217,9 @@ func runSignup() {
 
 	// Create user
 	req := service.SignupRequest{
-		Name:       name,
-		Email:      email,
-		WebhookURL: webhookURL,
+		Name:     name,
+		Email:    email,
+		Password: password,
 	}
 
 	result, err := userService.Signup(context.Background(), req)
@@ -223,7 +234,6 @@ func runSignup() {
 	fmt.Printf("User ID:     %s\n", result.User.ID)
 	fmt.Printf("Name:        %s\n", result.User.Name)
 	fmt.Printf("Email:       %s\n", result.User.Email)
-	fmt.Printf("Webhook URL: %s\n", result.User.WebhookURL)
 	fmt.Println()
 	fmt.Println("=== Your API Key (save this securely!) ===")
 	fmt.Println()
@@ -259,24 +269,19 @@ func runListUsers() {
 
 	fmt.Println("=== Users ===")
 	fmt.Println()
-	fmt.Printf("%-36s | %-20s | %-30s | %-6s | %s\n", "ID", "Name", "Email", "Active", "Webhook URL")
-	fmt.Println(strings.Repeat("-", 120))
+	fmt.Printf("%-36s | %-20s | %-30s | %-6s\n", "ID", "Name", "Email", "Active")
+	fmt.Println(strings.Repeat("-", 104))
 
 	for _, user := range users {
 		activeStr := "No"
 		if user.Active {
 			activeStr = "Yes"
 		}
-		webhook := user.WebhookURL
-		if len(webhook) > 30 {
-			webhook = webhook[:27] + "..."
-		}
-		fmt.Printf("%-36s | %-20s | %-30s | %-6s | %s\n",
+		fmt.Printf("%-36s | %-20s | %-30s | %-6s\n",
 			user.ID,
 			truncate(user.Name, 20),
 			truncate(user.Email, 30),
 			activeStr,
-			webhook,
 		)
 	}
 	fmt.Println()

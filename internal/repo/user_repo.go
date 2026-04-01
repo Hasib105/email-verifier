@@ -88,14 +88,6 @@ ORDER BY created_at DESC
 	return records, nil
 }
 
-func (r *Repository) UpdateUserWebhook(ctx context.Context, userID, webhookURL string) error {
-	query := `UPDATE users SET webhook_url = $2, updated_at = $3 WHERE id = $1`
-	if _, err := r.db.ExecContext(ctx, query, userID, webhookURL, time.Now().Unix()); err != nil {
-		return fmt.Errorf("update user webhook: %w", err)
-	}
-	return nil
-}
-
 func (r *Repository) UpdateUserSuperuser(ctx context.Context, userID string, isSuperuser bool) error {
 	query := `UPDATE users SET is_superuser = $2, updated_at = $3 WHERE id = $1`
 	if _, err := r.db.ExecContext(ctx, query, userID, isSuperuser, time.Now().Unix()); err != nil {
@@ -111,6 +103,7 @@ func (r *Repository) DeleteUser(ctx context.Context, userID string) error {
 	}
 	return nil
 }
+
 func (r *Repository) UpdateUserAPIKey(ctx context.Context, userID, newAPIKey string) error {
 	query := `UPDATE users SET api_key = $2, updated_at = $3 WHERE id = $1`
 	if _, err := r.db.ExecContext(ctx, query, userID, newAPIKey, time.Now().Unix()); err != nil {

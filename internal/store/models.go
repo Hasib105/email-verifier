@@ -1,5 +1,53 @@
 package store
 
+import (
+	"database/sql/driver"
+	"encoding/json"
+	"fmt"
+)
+
+type JSONStrings []string
+
+func (s JSONStrings) Value() (driver.Value, error) {
+	if len(s) == 0 {
+		return "[]", nil
+	}
+	raw, err := json.Marshal([]string(s))
+	if err != nil {
+		return nil, err
+	}
+	return string(raw), nil
+}
+
+func (s *JSONStrings) Scan(src any) error {
+	if src == nil {
+		*s = JSONStrings{}
+		return nil
+	}
+
+	var raw []byte
+	switch v := src.(type) {
+	case string:
+		raw = []byte(v)
+	case []byte:
+		raw = append([]byte(nil), v...)
+	default:
+		return fmt.Errorf("unsupported JSONStrings source: %T", src)
+	}
+
+	if len(raw) == 0 {
+		*s = JSONStrings{}
+		return nil
+	}
+
+	var decoded []string
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return err
+	}
+	*s = JSONStrings(decoded)
+	return nil
+}
+
 type User struct {
 	ID           string `db:"id" json:"id"`
 	Name         string `db:"name" json:"name"`
@@ -25,75 +73,60 @@ type UserInput struct {
 }
 
 type VerificationRecord struct {
-	ID            string `db:"id" json:"id"`
-	Email         string `db:"email" json:"email"`
-	Status        string `db:"status" json:"status"`
-	Message       string `db:"message" json:"message"`
-	Source        string `db:"source" json:"source"`
-	ProbeToken    string `db:"probe_token" json:"probe_token"`
-	SMTPAccountID string `db:"smtp_account_id" json:"smtp_account_id"`
-	UserID        string `db:"user_id" json:"user_id"`
-
-	CheckCount int  `db:"check_count" json:"check_count"`
-	Finalized  bool `db:"finalized" json:"finalized"`
-
-	FirstCheckedAt int64 `db:"first_checked_at" json:"first_checked_at"`
-	LastCheckedAt  int64 `db:"last_checked_at" json:"last_checked_at"`
-	NextCheckAt    int64 `db:"next_check_at" json:"next_check_at"`
-	CreatedAt      int64 `db:"created_at" json:"created_at"`
-	UpdatedAt      int64 `db:"updated_at" json:"updated_at"`
+	ID                string      `db:"id" json:"id"`
+	Email             string      `db:"email" json:"email"`
+	Domain            string      `db:"domain" json:"domain"`
+	UserID            string      `db:"user_id" json:"user_id"`
+	Classification    string      `db:"classification" json:"classification"`
+	ConfidenceScore   int         `db:"confidence_score" json:"confidence_score"`
+	RiskLevel         string      `db:"risk_level" json:"risk_level"`
+	Deterministic     bool        `db:"deterministic" json:"deterministic"`
+	State             string      `db:"state" json:"state"`
+	ReasonCodes       JSONStrings `db:"reason_codes" json:"reason_codes"`
+	ProtocolSummary   string      `db:"protocol_summary" json:"protocol_summary"`
+	EnrichmentSummary string      `db:"enrichment_summary" json:"enrichment_summary"`
+	ExpiresAt         int64       `db:"expires_at" json:"expires_at"`
+	LastVerifiedAt    int64       `db:"last_verified_at" json:"last_verified_at"`
+	LastEnrichedAt    int64       `db:"last_enriched_at" json:"last_enriched_at"`
+	CreatedAt         int64       `db:"created_at" json:"created_at"`
+	UpdatedAt         int64       `db:"updated_at" json:"updated_at"`
 }
 
-type SMTPAccount struct {
-	ID          string `db:"id" json:"id"`
-	UserID      string `db:"user_id" json:"user_id"`
-	Host        string `db:"host" json:"host"`
-	Port        int    `db:"port" json:"port"`
-	Username    string `db:"username" json:"username"`
-	Password    string `db:"password" json:"-"`
-	Sender      string `db:"sender" json:"sender"`
-	IMAPHost    string `db:"imap_host" json:"imap_host"`
-	IMAPPort    int    `db:"imap_port" json:"imap_port"`
-	IMAPMailbox string `db:"imap_mailbox" json:"imap_mailbox"`
-	DailyLimit  int    `db:"daily_limit" json:"daily_limit"`
-	SentToday   int    `db:"sent_today" json:"sent_today"`
-	ResetDate   string `db:"reset_date" json:"reset_date"`
-	Active      bool   `db:"active" json:"active"`
-	CreatedAt   int64  `db:"created_at" json:"created_at"`
-	UpdatedAt   int64  `db:"updated_at" json:"updated_at"`
+type VerificationCalloutAttempt struct {
+	ID             int64  `db:"id" json:"id"`
+	VerificationID string `db:"verification_id" json:"verification_id"`
+	SMTPHost       string `db:"smtp_host" json:"smtp_host"`
+	SMTPPort       int    `db:"smtp_port" json:"smtp_port"`
+	Stage          string `db:"stage" json:"stage"`
+	Recipient      string `db:"recipient" json:"recipient"`
+	Outcome        string `db:"outcome" json:"outcome"`
+	SMTPCode       int    `db:"smtp_code" json:"smtp_code"`
+	SMTPMessage    string `db:"smtp_message" json:"smtp_message"`
+	DurationMS     int64  `db:"duration_ms" json:"duration_ms"`
+	CreatedAt      int64  `db:"created_at" json:"created_at"`
 }
 
-type SMTPAccountInput struct {
-	ID          string
-	UserID      string
-	Host        string
-	Port        int
-	Username    string
-	Password    string
-	Sender      string
-	IMAPHost    string
-	IMAPPort    int
-	IMAPMailbox string
-	DailyLimit  int
-	Active      bool
+type DomainBaseline struct {
+	Domain         string `db:"domain" json:"domain"`
+	MXFingerprint  string `db:"mx_fingerprint" json:"mx_fingerprint"`
+	Classification string `db:"classification" json:"classification"`
+	SampleAddress  string `db:"sample_address" json:"sample_address"`
+	SMTPHost       string `db:"smtp_host" json:"smtp_host"`
+	SMTPCode       int    `db:"smtp_code" json:"smtp_code"`
+	SMTPMessage    string `db:"smtp_message" json:"smtp_message"`
+	CheckedAt      int64  `db:"checked_at" json:"checked_at"`
+	ExpiresAt      int64  `db:"expires_at" json:"expires_at"`
+	CreatedAt      int64  `db:"created_at" json:"created_at"`
+	UpdatedAt      int64  `db:"updated_at" json:"updated_at"`
 }
 
-type EmailTemplate struct {
-	ID              string `db:"id" json:"id"`
-	UserID          string `db:"user_id" json:"user_id"`
-	Name            string `db:"name" json:"name"`
-	SubjectTemplate string `db:"subject_template" json:"subject_template"`
-	BodyTemplate    string `db:"body_template" json:"body_template"`
-	Active          bool   `db:"active" json:"active"`
-	CreatedAt       int64  `db:"created_at" json:"created_at"`
-	UpdatedAt       int64  `db:"updated_at" json:"updated_at"`
-}
-
-type EmailTemplateInput struct {
-	ID              string
-	UserID          string
-	Name            string
-	SubjectTemplate string
-	BodyTemplate    string
-	Active          bool
+type EnrichmentEvidence struct {
+	ID             string `db:"id" json:"id"`
+	VerificationID string `db:"verification_id" json:"verification_id"`
+	Source         string `db:"source" json:"source"`
+	Kind           string `db:"kind" json:"kind"`
+	Signal         string `db:"signal" json:"signal"`
+	Weight         int    `db:"weight" json:"weight"`
+	Summary        string `db:"summary" json:"summary"`
+	CreatedAt      int64  `db:"created_at" json:"created_at"`
 }
