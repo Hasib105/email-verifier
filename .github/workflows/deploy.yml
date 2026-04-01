@@ -1,0 +1,102 @@
+name: build-and-deploy
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+
+jobs:
+  build-images:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-api:latest
+            ${{ env.IMAGE_PREFIX }}-api:${{ github.sha }}
+
+      - name: Build and push Web image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./web
+          file: ./web/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-web:latest
+            ${{ env.IMAGE_PREFIX }}-web:${{ github.sha }}
+
+      - name: Build and push Tor image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./tor.Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-tor:latest
+            ${{ env.IMAGE_PREFIX }}-tor:${{ github.sha }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-images
+
+    steps:
+      - name: Pull-and-run on server
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_SSH_PORT }}
+          script_stop: true
+          script: |
+            set -e
+
+            APP_DIR="${{ secrets.SERVER_APP_DIR }}"
+            if [ -z "$APP_DIR" ]; then
+              APP_DIR="$HOME/email-verifier-api"
+            fi
+
+            if [ ! -d "$APP_DIR/.git" ]; then
+              git clone https://github.com/${{ github.repository }}.git "$APP_DIR"
+            fi
+
+            cd "$APP_DIR"
+            git checkout main
+            git pull --ff-only origin main
+
+            if [ ! -f .env ]; then
+              cp .env.example .env
+            fi
+
+            echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+            export GHCR_IMAGE_PREFIX="ghcr.io/${{ github.repository }}"
+
+            docker compose --env-file .env -f deploy/docker-compose.prod.yml pull
+            docker compose --env-file .env -f deploy/docker-compose.prod.yml up -d
+            docker image prune -f

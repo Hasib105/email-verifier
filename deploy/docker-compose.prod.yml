@@ -19,9 +19,7 @@ services:
     restart: unless-stopped
 
   tor:
-    build:
-      context: .
-      dockerfile: tor.Dockerfile
+    image: ${GHCR_IMAGE_PREFIX:-ghcr.io/hasib105/email-verifier}-tor:latest
     networks:
       - verifier-net
     restart: unless-stopped
@@ -33,14 +31,14 @@ services:
       start_period: 30s
 
   api:
-    build: .
+    image: ${GHCR_IMAGE_PREFIX:-ghcr.io/hasib105/email-verifier}-api:latest
     ports:
       - "3000:3000"
     environment:
       - PORT=3000
-      - API_KEY=super-secret-key-123
+      - API_KEY=${API_KEY}
       - TOR_SOCKS_ADDR=tor:9050
-      - MAX_CONCURRENCY=5
+      - MAX_CONCURRENCY=${MAX_CONCURRENCY:-5}
       - DB_HOST=${DB_HOST:-postgres}
       - DB_PORT=${DB_PORT:-15432}
       - DB_USER=${DB_USER:-${POSTGRES_USER:-postgres}}
@@ -48,11 +46,11 @@ services:
       - DB_NAME=${DB_NAME:-${POSTGRES_DB:-verifier}}
       - DB_SSLMODE=${DB_SSLMODE:-disable}
       - DATABASE_DSN=${DATABASE_DSN:-}
-      - WEBHOOK_URL=
-      - WEBHOOK_TIMEOUT=10s
-      - CHECK_INTERVAL=1m
-      - FIRST_BOUNCE_DELAY=1m
-      - SECOND_BOUNCE_DELAY=6h
+      - WEBHOOK_URL=${WEBHOOK_URL:-}
+      - WEBHOOK_TIMEOUT=${WEBHOOK_TIMEOUT:-10s}
+      - CHECK_INTERVAL=${CHECK_INTERVAL:-1m}
+      - FIRST_BOUNCE_DELAY=${FIRST_BOUNCE_DELAY:-1m}
+      - SECOND_BOUNCE_DELAY=${SECOND_BOUNCE_DELAY:-6h}
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,9 +61,7 @@ services:
     restart: unless-stopped
 
   web:
-    build: 
-      context: ./web
-      dockerfile: Dockerfile
+    image: ${GHCR_IMAGE_PREFIX:-ghcr.io/hasib105/email-verifier}-web:latest
     ports:
       - "80:80"
     depends_on:

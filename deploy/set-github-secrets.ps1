@@ -1,6 +1,11 @@
 param(
   [string]$EnvFile = ".env",
-  [switch]$SkipEmpty = $true
+  [switch]$SkipEmpty = $true,
+  [string]$ServerHost = "",
+  [string]$ServerUser = "",
+  [string]$ServerPassword = "",
+  [string]$ServerSshPort = "22",
+  [string]$ServerAppDir = ""
 )
 
 Set-StrictMode -Version Latest
@@ -35,13 +40,37 @@ foreach ($line in $lines) {
 
 if ($pairs.Count -eq 0) {
   Write-Host "No env entries found to upload."
+}
+
+if (-not [string]::IsNullOrWhiteSpace($ServerHost)) {
+  $pairs["SERVER_HOST"] = $ServerHost
+}
+if (-not [string]::IsNullOrWhiteSpace($ServerUser)) {
+  $pairs["SERVER_USER"] = $ServerUser
+}
+if (-not [string]::IsNullOrWhiteSpace($ServerPassword)) {
+  $pairs["SERVER_PASSWORD"] = $ServerPassword
+}
+if (-not [string]::IsNullOrWhiteSpace($ServerSshPort)) {
+  $pairs["SERVER_SSH_PORT"] = $ServerSshPort
+}
+if (-not [string]::IsNullOrWhiteSpace($ServerAppDir)) {
+  $pairs["SERVER_APP_DIR"] = $ServerAppDir
+}
+
+if ($pairs.Count -eq 0) {
+  Write-Host "No secrets found to upload."
   exit 0
 }
 
 Write-Host "Uploading $($pairs.Count) secrets to GitHub..."
 foreach ($key in $pairs.Keys) {
   $value = $pairs[$key]
-  $value | gh secret set $key --body-file -
+  # Use stdin input since some gh versions do not support --body-file.
+  $null = $value | gh secret set $key
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to set secret: $key"
+  }
   Write-Host "Set secret: $key"
 }
 

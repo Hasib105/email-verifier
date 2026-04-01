@@ -27,6 +27,18 @@ gh workflow list
 pwsh -File ./deploy/set-github-secrets.ps1 -EnvFile ./.env
 ```
 
+## Push env + deploy secrets together
+
+```powershell
+pwsh -File ./deploy/set-github-secrets.ps1 \
+	-EnvFile ./.env \
+	-ServerHost "<server-ip>" \
+	-ServerUser "<server-user>" \
+	-ServerPassword "<server-password>" \
+	-ServerSshPort "22" \
+	-ServerAppDir "/opt/email-verifier-api"
+```
+
 ## Manual single-secret set examples
 
 ```powershell
@@ -37,7 +49,7 @@ gh secret set DB_PASSWORD --body "your-db-password"
 ## Trigger/check workflow runs
 
 ```powershell
-gh workflow run ci.yml
-gh run list --workflow ci.yml
+gh workflow run deploy.yml
+gh run list --workflow deploy.yml
 gh run watch
 ```
