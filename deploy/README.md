@@ -12,6 +12,7 @@ This folder contains deployment helpers and CI/CD setup commands.
 ## Quick Use
 
 1. Copy `.env.example` to `.env` and fill real values.
+   - If host port `80` is already used on your server, set `WEB_PORT` (default is `8080`).
 2. Run `docker compose --env-file .env up -d --build`.
 3. Push env values to GitHub Secrets using:
    - `pwsh -File ./deploy/set-github-secrets.ps1 -EnvFile ./.env`

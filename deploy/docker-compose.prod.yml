@@ -63,7 +63,7 @@ services:
   web:
     image: ${GHCR_IMAGE_PREFIX:-ghcr.io/hasib105/email-verifier}-web:latest
     ports:
-      - "80:80"
+      - "${WEB_PORT:-8080}:80"
     depends_on:
       - api
     networks:
