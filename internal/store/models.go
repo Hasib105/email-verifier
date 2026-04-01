@@ -25,23 +25,23 @@ type UserInput struct {
 }
 
 type VerificationRecord struct {
-	ID            string `db:"id"`
-	Email         string `db:"email"`
-	Status        string `db:"status"`
-	Message       string `db:"message"`
-	Source        string `db:"source"`
-	ProbeToken    string `db:"probe_token"`
-	SMTPAccountID string `db:"smtp_account_id"`
-	UserID        string `db:"user_id"`
+	ID            string `db:"id" json:"id"`
+	Email         string `db:"email" json:"email"`
+	Status        string `db:"status" json:"status"`
+	Message       string `db:"message" json:"message"`
+	Source        string `db:"source" json:"source"`
+	ProbeToken    string `db:"probe_token" json:"probe_token"`
+	SMTPAccountID string `db:"smtp_account_id" json:"smtp_account_id"`
+	UserID        string `db:"user_id" json:"user_id"`
 
-	CheckCount int  `db:"check_count"`
-	Finalized  bool `db:"finalized"`
+	CheckCount int  `db:"check_count" json:"check_count"`
+	Finalized  bool `db:"finalized" json:"finalized"`
 
-	FirstCheckedAt int64 `db:"first_checked_at"`
-	LastCheckedAt  int64 `db:"last_checked_at"`
-	NextCheckAt    int64 `db:"next_check_at"`
-	CreatedAt      int64 `db:"created_at"`
-	UpdatedAt      int64 `db:"updated_at"`
+	FirstCheckedAt int64 `db:"first_checked_at" json:"first_checked_at"`
+	LastCheckedAt  int64 `db:"last_checked_at" json:"last_checked_at"`
+	NextCheckAt    int64 `db:"next_check_at" json:"next_check_at"`
+	CreatedAt      int64 `db:"created_at" json:"created_at"`
+	UpdatedAt      int64 `db:"updated_at" json:"updated_at"`
 }
 
 type SMTPAccount struct {

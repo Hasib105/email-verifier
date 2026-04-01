@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS verification_events (
 	status TEXT NOT NULL,
 	message TEXT NOT NULL,
 	created_at BIGINT NOT NULL,
-	FOREIGN KEY (verification_id) REFERENCES verifications(id)
+	FOREIGN KEY (verification_id) REFERENCES verifications(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS smtp_accounts (
@@ -125,6 +125,23 @@ DO $$ BEGIN
     IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'email_templates_name_key') THEN
         ALTER TABLE email_templates DROP CONSTRAINT email_templates_name_key;
     END IF;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+-- Migration: ensure verification events cascade delete with parent verification
+DO $$ BEGIN
+	IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'verification_events_verification_id_fkey') THEN
+		ALTER TABLE verification_events DROP CONSTRAINT verification_events_verification_id_fkey;
+	END IF;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+DO $$ BEGIN
+	IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'verification_events_verification_id_fkey') THEN
+		ALTER TABLE verification_events
+			ADD CONSTRAINT verification_events_verification_id_fkey
+			FOREIGN KEY (verification_id) REFERENCES verifications(id) ON DELETE CASCADE;
+	END IF;
 EXCEPTION WHEN OTHERS THEN NULL;
 END $$;
 `

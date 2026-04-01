@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { RefreshCw, Trash2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
 import type { VerificationRecord } from '../types';
@@ -8,11 +8,12 @@ export function EmailStatus() {
   const { config } = useAuth();
   const [verifications, setVerifications] = useState<VerificationRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [offset, setOffset] = useState(0);
   const limit = 20;
 
-  const loadVerifications = async () => {
+  const loadVerifications = useCallback(async () => {
     setLoading(true);
     try {
       const response = await api.listVerifications(config, limit, offset);
@@ -23,11 +24,27 @@ export function EmailStatus() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [config, limit, offset]);
 
   useEffect(() => {
     loadVerifications();
-  }, [config, offset]);
+  }, [loadVerifications]);
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Delete this email status record?')) {
+      return;
+    }
+
+    setDeletingId(id);
+    try {
+      await api.deleteVerification(config, id);
+      await loadVerifications();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete verification');
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   const getStatusBadge = (status: string) => {
     const statusMap: Record<string, string> = {
@@ -81,12 +98,13 @@ export function EmailStatus() {
                 <th className="hidden sm:table-cell px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Source</th>
                 <th className="hidden md:table-cell px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Message</th>
                 <th className="hidden lg:table-cell px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Checked</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-8 text-center">
+                  <td colSpan={6} className="px-6 py-8 text-center">
                     <div className="flex justify-center">
                       <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-yellow-500"></div>
                     </div>
@@ -94,19 +112,22 @@ export function EmailStatus() {
                 </tr>
               ) : verifications.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-8 text-center text-gray-500">
+                  <td colSpan={6} className="px-6 py-8 text-center text-gray-500">
                     No verifications found
                   </td>
                 </tr>
               ) : (
-                verifications.map((item) => (
+                verifications.map((item) => {
+                  const status = item.status || 'unknown';
+
+                  return (
                   <tr key={item.id} className="hover:bg-gray-50">
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 max-w-[200px] truncate">
                       {item.email}
                     </td>
                     <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm">
-                      <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusBadge(item.status)}`}>
-                        {item.status.replace(/_/g, ' ')}
+                      <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusBadge(status)}`}>
+                        {status.replace(/_/g, ' ')}
                       </span>
                     </td>
                     <td className="hidden sm:table-cell px-6 py-4 whitespace-nowrap text-sm text-gray-500">
@@ -118,8 +139,18 @@ export function EmailStatus() {
                     <td className="hidden lg:table-cell px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {formatDate(item.last_checked_at)}
                     </td>
+                    <td className="px-4 py-4 text-right">
+                      <button
+                        onClick={() => handleDelete(item.id)}
+                        disabled={deletingId === item.id}
+                        className="p-1 text-gray-400 hover:text-red-600 disabled:opacity-50"
+                        title="Delete record"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </td>
                   </tr>
-                ))
+                )})
               )}
             </tbody>
           </table>

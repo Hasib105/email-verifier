@@ -49,7 +49,7 @@ services:
       - WEBHOOK_URL=
       - WEBHOOK_TIMEOUT=10s
       - CHECK_INTERVAL=1m
-      - FIRST_BOUNCE_DELAY=2m
+      - FIRST_BOUNCE_DELAY=1m
       - SECOND_BOUNCE_DELAY=6h
     depends_on:
       postgres:

@@ -111,3 +111,10 @@ func (r *Repository) DeleteUser(ctx context.Context, userID string) error {
 	}
 	return nil
 }
+func (r *Repository) UpdateUserAPIKey(ctx context.Context, userID, newAPIKey string) error {
+	query := `UPDATE users SET api_key = $2, updated_at = $3 WHERE id = $1`
+	if _, err := r.db.ExecContext(ctx, query, userID, newAPIKey, time.Now().Unix()); err != nil {
+		return fmt.Errorf("update user api key: %w", err)
+	}
+	return nil
+}

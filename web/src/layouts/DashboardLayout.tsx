@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Mail, FileText, Settings, Activity, ShieldAlert, LogOut, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Mail, FileText, Settings, Activity, ShieldAlert, LogOut, Menu, X, PlayCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 export function DashboardLayout() {
@@ -11,6 +11,7 @@ export function DashboardLayout() {
 
   const navigation = [
     { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+    { name: 'Playground', href: '/dashboard/playground', icon: PlayCircle },
     { name: 'Email Config', href: '/dashboard/email-config', icon: Mail },
     { name: 'Templates', href: '/dashboard/templates', icon: FileText },
     { name: 'Email Status', href: '/dashboard/status', icon: Activity },

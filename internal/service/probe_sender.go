@@ -10,6 +10,7 @@ import (
 	"net/smtp"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/net/proxy"
 )
@@ -46,6 +47,12 @@ func (s *SMTPProbeSender) SendProbeForUser(ctx context.Context, targetEmail, tok
 
 	addr := fmt.Sprintf("%s:%d", account.Host, account.Port)
 	host := account.Host
+	if err := validateServerHost("host", host); err != nil {
+		return "", fmt.Errorf("invalid smtp account configuration: %w", err)
+	}
+	if err := validatePort("port", account.Port); err != nil {
+		return "", fmt.Errorf("invalid smtp account configuration: %w", err)
+	}
 
 	var auth smtp.Auth
 	if account.Username != "" {
@@ -57,7 +64,7 @@ func (s *SMTPProbeSender) SendProbeForUser(ctx context.Context, targetEmail, tok
 
 	// Get rotating template - increment counter atomically for round-robin
 	rotationIndex := int(atomic.AddUint64(&s.rotationCounter, 1))
-	
+
 	var tmpl *store.EmailTemplate
 	if userID != "" {
 		tmpl, err = s.repo.GetRotatingEmailTemplate(ctx, userID, rotationIndex)
@@ -94,15 +101,31 @@ func (s *SMTPProbeSender) sendViaTor(addr, host string, port int, auth smtp.Auth
 	var err error
 
 	if s.torSocksAddr != "" {
-		dialer, derr := proxy.SOCKS5("tcp", s.torSocksAddr, nil, proxy.Direct)
-		if derr != nil {
-			return fmt.Errorf("create socks5 dialer: %w", derr)
+		const maxTorDialAttempts = 3
+		for attempt := 1; attempt <= maxTorDialAttempts; attempt++ {
+			dialer, derr := proxy.SOCKS5("tcp", s.torSocksAddr, nil, proxy.Direct)
+			if derr != nil {
+				return fmt.Errorf("create socks5 dialer: %w", derr)
+			}
+
+			conn, err = dialer.Dial("tcp", addr)
+			if err == nil {
+				break
+			}
+
+			if !strings.Contains(strings.ToLower(err.Error()), "general socks server failure") || attempt == maxTorDialAttempts {
+				break
+			}
+
+			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
 		}
-		conn, err = dialer.Dial("tcp", addr)
 	} else {
 		conn, err = net.Dial("tcp", addr)
 	}
 	if err != nil {
+		if s.torSocksAddr != "" && strings.Contains(strings.ToLower(err.Error()), "general socks server failure") {
+			return fmt.Errorf("dial smtp server through tor: %w (possible causes: invalid smtp host or smtp egress blocked by Tor exit policy)", err)
+		}
 		return fmt.Errorf("dial smtp server: %w", err)
 	}
 	defer conn.Close()

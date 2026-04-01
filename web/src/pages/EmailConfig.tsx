@@ -1,8 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Plus, Pencil, Trash2, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
 import type { SMTPAccount, SMTPAccountCreateRequest } from '../types';
+
+const hostnamePattern = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/i;
+
+function isValidHost(value: string): boolean {
+  const host = value.trim();
+  if (!host) return false;
+  if (host.includes('@') || host.includes('://') || /[\\/\s]/.test(host)) return false;
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) return true;
+  return hostnamePattern.test(host);
+}
 
 export function EmailConfig() {
   const { config } = useAuth();
@@ -26,7 +36,7 @@ export function EmailConfig() {
     active: true,
   });
 
-  const loadAccounts = async () => {
+  const loadAccounts = useCallback(async () => {
     setLoading(true);
     try {
       const response = await api.listSmtpAccounts(config);
@@ -36,11 +46,11 @@ export function EmailConfig() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [config]);
 
   useEffect(() => {
-    loadAccounts();
-  }, [config]);
+    void loadAccounts();
+  }, [loadAccounts]);
 
   const resetForm = () => {
     setFormData({
@@ -89,14 +99,43 @@ export function EmailConfig() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const smtpHost = formData.host.trim();
+    const imapHost = (formData.imap_host.trim() || smtpHost);
+    if (!isValidHost(smtpHost)) {
+      setError('SMTP host must be a valid hostname like smtp.gmail.com (not an email address).');
+      return;
+    }
+    if (!isValidHost(imapHost)) {
+      setError('IMAP host must be a valid hostname like imap.gmail.com.');
+      return;
+    }
+    if (formData.port < 1 || formData.port > 65535) {
+      setError('SMTP port must be between 1 and 65535.');
+      return;
+    }
+    if (formData.imap_port < 1 || formData.imap_port > 65535) {
+      setError('IMAP port must be between 1 and 65535.');
+      return;
+    }
+
     setSaving(true);
     setError('');
 
+    const payload: SMTPAccountCreateRequest = {
+      ...formData,
+      host: smtpHost,
+      imap_host: imapHost,
+      username: formData.username.trim(),
+      sender: formData.sender.trim(),
+      imap_mailbox: formData.imap_mailbox.trim() || 'INBOX',
+    };
+
     try {
       if (editingId) {
-        await api.updateSmtpAccount(config, editingId, formData);
+        await api.updateSmtpAccount(config, editingId, payload);
       } else {
-        await api.createSmtpAccount(config, formData);
+        await api.createSmtpAccount(config, payload);
       }
       resetForm();
       await loadAccounts();

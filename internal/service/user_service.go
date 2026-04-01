@@ -256,3 +256,15 @@ func generateAPIKey() (string, error) {
 	}
 	return "evk_" + hex.EncodeToString(bytes), nil
 }
+
+func (s *UserService) RegenerateAPIKey(ctx context.Context, userID string) (string, error) {
+	newKey, err := generateAPIKey()
+	if err != nil {
+		return "", err
+	}
+
+	if err := s.repo.UpdateUserAPIKey(ctx, userID, newKey); err != nil {
+		return "", err
+	}
+	return newKey, nil
+}

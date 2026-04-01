@@ -405,13 +405,17 @@ func TestBounceCheckProcess_NoBounce(t *testing.T) {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
 
-	// After processing with no bounce, record should be finalized
-	if !processedRecord.Finalized {
-		t.Error("Expected record to be finalized after bounce check")
+	// First check with no bounce should remain pending and schedule second check
+	if processedRecord.Finalized {
+		t.Error("Expected record to remain non-finalized after first no-bounce check")
 	}
 
 	if processedRecord.CheckCount != 1 {
 		t.Errorf("Expected check_count to be 1, got: %d", processedRecord.CheckCount)
+	}
+
+	if processedRecord.NextCheckAt == 0 {
+		t.Error("Expected second check to be scheduled after first no-bounce check")
 	}
 
 	// Webhook should be called with user's webhook URL
@@ -421,6 +425,10 @@ func TestBounceCheckProcess_NoBounce(t *testing.T) {
 
 	if mockWebhook.SentEvents[0].WebhookURL != testUser.WebhookURL {
 		t.Errorf("Expected webhook URL '%s', got: %s", testUser.WebhookURL, mockWebhook.SentEvents[0].WebhookURL)
+	}
+
+	if mockWebhook.SentEvents[0].Event != "verify.check.first.no_bounce" {
+		t.Errorf("Expected webhook event 'verify.check.first.no_bounce', got: %s", mockWebhook.SentEvents[0].Event)
 	}
 }
 
@@ -606,8 +614,8 @@ func simulateVerificationWithProbe(repo *MockRepository, webhook *MockWebhookDis
 		if account != nil {
 			record.SMTPAccountID = account.ID
 			record.Status = "pending_bounce_check"
-			record.Message = "probe sent via smtp account " + account.ID + "; single bounce check scheduled at 6h"
-			record.NextCheckAt = time.Now().Add(cfg.SecondBounceDelay).Unix()
+			record.Message = "probe sent via smtp account " + account.ID + "; first IMAP bounce check scheduled"
+			record.NextCheckAt = time.Now().Add(cfg.FirstBounceDelay).Unix()
 			record.Finalized = false
 		} else {
 			record.Status = "error"
@@ -632,19 +640,36 @@ func simulateVerificationWithProbe(repo *MockRepository, webhook *MockWebhookDis
 
 func simulateBounceCheck(repo *MockRepository, webhook *MockWebhookDispatcher, rec *store.VerificationRecord, account *store.SMTPAccount, user *store.User, bounced bool, bounceReason string) (*store.VerificationRecord, error) {
 	now := time.Now().Unix()
+	checkNumber := rec.CheckCount + 1
 	rec.LastCheckedAt = now
 	rec.UpdatedAt = now
 	rec.CheckCount++
-	rec.NextCheckAt = 0
-	rec.Finalized = true
 
-	event := "verify.check.no_bounce"
+	event := "verify.check.first.no_bounce"
+	if checkNumber >= 2 {
+		event = "verify.check.second.no_bounce"
+	}
+
 	if bounced {
 		rec.Status = "bounced"
 		rec.Message = bounceReason
+		rec.NextCheckAt = 0
+		rec.Finalized = true
 		event = "verify.bounced"
 	} else {
-		rec.Message = "no bounce detected in single scheduled check; keeping existing status"
+		if checkNumber == 1 {
+			rec.Status = "pending_bounce_check"
+			rec.Message = "no bounce detected in first IMAP check; second check scheduled"
+			rec.NextCheckAt = time.Now().Add(6 * time.Hour).Unix()
+			rec.Finalized = false
+			event = "verify.check.first.no_bounce"
+		} else {
+			rec.Status = "valid"
+			rec.Message = "no bounce detected in second IMAP check"
+			rec.NextCheckAt = 0
+			rec.Finalized = true
+			event = "verify.check.second.no_bounce"
+		}
 	}
 
 	repo.UpsertVerification(context.Background(), rec)

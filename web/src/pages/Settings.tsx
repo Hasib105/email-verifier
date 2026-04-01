@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react';
-import { Save, TestTube, CheckCircle, AlertCircle } from 'lucide-react';
+import { Save, TestTube, CheckCircle, AlertCircle, Key, RefreshCw, Eye, EyeOff, Copy } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
 
 export function Settings() {
-  const { config } = useAuth();
+  const { config, updateApiKey } = useAuth();
   const [webhookUrl, setWebhookUrl] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -20,6 +23,9 @@ export function Settings() {
     try {
       const settings = await api.getSettings(config);
       setWebhookUrl(settings.webhook_url || '');
+      // If the API allows passing back API key on /users/me, we can use it.
+      // Otherwise, we take it from AuthContext config.
+      setApiKey(config.apiKey);
     } catch (err) {
       setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to load settings' });
     } finally {
@@ -61,6 +67,28 @@ export function Settings() {
     }
   };
 
+  const handleRegenerateApiKey = async () => {
+    if (!window.confirm('Are you sure? Any integrations using your current API key will break.')) return;
+    
+    setRegenerating(true);
+    setMessage(null);
+    try {
+      const response = await api.regenerateAPIKey(config);
+      setApiKey(response.api_key);
+      updateApiKey(response.api_key);
+      setMessage({ type: 'success', text: 'API Key regenerated successfully.' });
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to regenerate API key' });
+    } finally {
+      setRegenerating(false);
+    }
+  };
+
+  const copyApiKey = () => {
+    navigator.clipboard.writeText(apiKey);
+    setMessage({ type: 'success', text: 'API Key copied to clipboard!' });
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center items-center py-12">
@@ -78,14 +106,66 @@ export function Settings() {
 
       {message && (
         <div className={`flex items-center gap-2 p-4 rounded-xl text-sm ${
-          message.type === 'success' 
-            ? 'bg-green-50 border border-green-200 text-green-700' 
+          message.type === 'success'
+            ? 'bg-green-50 border border-green-200 text-green-700'
             : 'bg-red-50 border border-red-200 text-red-700'
         }`}>
           {message.type === 'success' ? <CheckCircle className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
           {message.text}
         </div>
       )}
+
+      <div className="bg-white border rounded-xl shadow-sm p-6">
+        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+          <Key className="w-5 h-5 text-gray-500" />
+          API Access Configuration
+        </h3>
+        <p className="text-sm text-gray-500 mb-4">
+          Your API Key is used to authenticate requests to the verifier API. Keep it secure and do not share it.
+        </p>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Your API Key</label>
+            <div className="flex bg-gray-50 border border-gray-300 rounded-md overflow-hidden">
+              <input
+                type={showApiKey ? "text" : "password"}
+                readOnly
+                value={apiKey}
+                className="flex-1 bg-transparent border-none focus:ring-0 px-3 py-2 text-sm text-gray-800 font-mono"
+              />
+              <button
+                type="button"
+                onClick={() => setShowApiKey(!showApiKey)}
+                className="px-3 text-gray-500 hover:text-gray-700 hover:bg-gray-100 flex items-center justify-center transition-colors"
+                title={showApiKey ? "Hide key" : "Show key"}
+              >
+                {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+              <button
+                type="button"
+                onClick={copyApiKey}
+                className="px-3 border-l border-gray-300 text-gray-500 hover:text-gray-700 hover:bg-gray-100 flex items-center justify-center transition-colors"
+                title="Copy to clipboard"
+              >
+                <Copy className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+          
+          <div className="pt-2">
+            <button
+              type="button"
+              onClick={handleRegenerateApiKey}
+              disabled={regenerating}
+              className="flex items-center gap-2 bg-white border border-gray-300 text-red-600 px-4 py-2 rounded-md text-sm font-medium hover:bg-red-50 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={`w-4 h-4 ${regenerating ? 'animate-spin' : ''}`} />
+              {regenerating ? 'Regenerating...' : 'Regenerate API Key'}
+            </button>
+          </div>
+        </div>
+      </div>
 
       <div className="bg-white border rounded-xl shadow-sm p-6">
         <h3 className="text-lg font-semibold mb-4">Webhook Configuration</h3>

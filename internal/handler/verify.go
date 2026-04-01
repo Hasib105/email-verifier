@@ -509,6 +509,40 @@ func GetVerificationHandler(svc *service.EmailVerificationService, userSvc *serv
 	}
 }
 
+// @Summary Delete verification
+// @Description Deletes a specific verification record owned by the authenticated user
+// @Tags verification
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Param id path string true "Verification ID"
+// @Success 200 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /verifications/{id} [delete]
+func DeleteVerificationHandler(svc *service.EmailVerificationService, userSvc *service.UserService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		user, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		id := c.Params("id")
+		err = svc.DeleteVerificationForUser(context.Background(), id, user.ID)
+		if errors.Is(err, service.ErrVerificationNotFound) {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": err.Error()})
+		}
+		if errors.Is(err, service.ErrVerificationForbidden) {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": err.Error()})
+		}
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		return c.JSON(fiber.Map{"message": "verification deleted"})
+	}
+}
+
 // @Summary Get verification stats
 // @Description Returns verification statistics for the authenticated user
 // @Tags verification
@@ -535,7 +569,7 @@ func GetVerificationStatsHandler(svc *service.EmailVerificationService, userSvc 
 		}
 
 		return c.JSON(fiber.Map{
-			"total":  total,
+			"total":     total,
 			"by_status": stats,
 		})
 	}

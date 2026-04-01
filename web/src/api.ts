@@ -128,6 +128,11 @@ export const api = {
   getCurrentUser: (config: ApiConfig) =>
     request<User>(config, '/users/me', { method: 'GET' }),
 
+  regenerateAPIKey: (config: ApiConfig) =>
+    request<{ api_key: string }>(config, '/users/api-key/regenerate', {
+      method: 'POST',
+    }),
+
   updateWebhook: (config: ApiConfig, webhookUrl: string) =>
     request<{ message: string }>(config, '/users/webhook', {
       method: 'PUT',
@@ -177,6 +182,9 @@ export const api = {
 
   getVerification: (config: ApiConfig, id: string) =>
     request<VerificationRecord>(config, `/verifications/${id}`, { method: 'GET' }),
+
+  deleteVerification: (config: ApiConfig, id: string) =>
+    request<{ message: string }>(config, `/verifications/${id}`, { method: 'DELETE' }),
 
   getVerificationStats: (config: ApiConfig) =>
     request<VerificationStats>(config, '/verifications/stats', { method: 'GET' }),

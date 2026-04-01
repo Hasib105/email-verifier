@@ -21,6 +21,11 @@ type ServiceConfig struct {
 	CheckInterval     time.Duration
 }
 
+var (
+	ErrVerificationNotFound  = errors.New("verification not found")
+	ErrVerificationForbidden = errors.New("verification access denied")
+)
+
 type VerifyResponse struct {
 	ID          string `json:"id"`
 	Email       string `json:"email"`
@@ -128,8 +133,8 @@ func (s *EmailVerificationService) VerifyEmail(ctx context.Context, email string
 		} else {
 			record.SMTPAccountID = accountID
 			record.Status = "pending_bounce_check"
-			record.Message = fmt.Sprintf("probe sent via smtp account %s; bounce check scheduled at 6h", accountID)
-			record.NextCheckAt = time.Now().Add(s.cfg.SecondBounceDelay).Unix()
+			record.Message = fmt.Sprintf("probe sent via smtp account %s; first IMAP bounce check scheduled in %s", accountID, s.cfg.FirstBounceDelay)
+			record.NextCheckAt = time.Now().Add(s.cfg.FirstBounceDelay).Unix()
 			record.Finalized = false
 		}
 	} else {
@@ -178,6 +183,18 @@ func (s *EmailVerificationService) CreateSMTPAccount(ctx context.Context, req SM
 	}
 	if req.DailyLimit <= 0 {
 		req.DailyLimit = 100
+	}
+	if err := validateServerHost("host", req.Host); err != nil {
+		return nil, err
+	}
+	if err := validateServerHost("imap_host", req.IMAPHost); err != nil {
+		return nil, err
+	}
+	if err := validatePort("port", req.Port); err != nil {
+		return nil, err
+	}
+	if err := validatePort("imap_port", req.IMAPPort); err != nil {
+		return nil, err
 	}
 
 	input := store.SMTPAccountInput{
@@ -302,6 +319,18 @@ func (s *EmailVerificationService) UpdateSMTPAccount(ctx context.Context, id str
 	if req.DailyLimit <= 0 {
 		req.DailyLimit = 100
 	}
+	if err := validateServerHost("host", req.Host); err != nil {
+		return nil, err
+	}
+	if err := validateServerHost("imap_host", req.IMAPHost); err != nil {
+		return nil, err
+	}
+	if err := validatePort("port", req.Port); err != nil {
+		return nil, err
+	}
+	if err := validatePort("imap_port", req.IMAPPort); err != nil {
+		return nil, err
+	}
 
 	active := true
 	if req.Active != nil {
@@ -416,22 +445,50 @@ func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store
 	}, rec.Email, rec.ProbeToken)
 
 	now := time.Now().Unix()
+	checkNumber := rec.CheckCount + 1
 	rec.LastCheckedAt = now
 	rec.UpdatedAt = now
 	rec.CheckCount++
-	rec.NextCheckAt = 0
-	rec.Finalized = true
 
-	event := "verify.check.no_bounce"
+	event := "verify.check.first.no_bounce"
+	if checkNumber >= 2 {
+		event = "verify.check.second.no_bounce"
+	}
+
 	if err != nil {
-		rec.Message = fmt.Sprintf("single bounce check error: %v", err)
-		event = "verify.check.error"
+		if checkNumber == 1 {
+			rec.Status = "pending_bounce_check"
+			rec.Message = fmt.Sprintf("first IMAP bounce check failed: %v; second check will still run", err)
+			rec.NextCheckAt = time.Now().Add(s.cfg.SecondBounceDelay).Unix()
+			rec.Finalized = false
+			event = "verify.check.first.error"
+		} else {
+			rec.Status = "error"
+			rec.Message = fmt.Sprintf("second IMAP bounce check failed: %v", err)
+			rec.NextCheckAt = 0
+			rec.Finalized = true
+			event = "verify.check.second.error"
+		}
 	} else if bounced {
 		rec.Status = "bounced"
 		rec.Message = reason
+		rec.NextCheckAt = 0
+		rec.Finalized = true
 		event = "verify.bounced"
 	} else {
-		rec.Message = "no bounce detected in single scheduled check; keeping existing status"
+		if checkNumber == 1 {
+			rec.Status = "pending_bounce_check"
+			rec.Message = "no bounce detected in first IMAP check; second check scheduled"
+			rec.NextCheckAt = time.Now().Add(s.cfg.SecondBounceDelay).Unix()
+			rec.Finalized = false
+			event = "verify.check.first.no_bounce"
+		} else {
+			rec.Status = "valid"
+			rec.Message = "no bounce detected in second IMAP check"
+			rec.NextCheckAt = 0
+			rec.Finalized = true
+			event = "verify.check.second.no_bounce"
+		}
 	}
 
 	if err := s.repo.UpsertVerification(ctx, rec); err != nil {
@@ -470,6 +527,25 @@ func responseFromRecord(rec *store.VerificationRecord, cached bool) VerifyRespon
 		resp.NextCheckAt = rec.NextCheckAt
 	}
 	return resp
+}
+
+func (s *EmailVerificationService) DeleteVerificationForUser(ctx context.Context, id, userID string) error {
+	if strings.TrimSpace(id) == "" {
+		return errors.New("verification id is required")
+	}
+
+	record, err := s.repo.GetVerificationByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if record == nil {
+		return ErrVerificationNotFound
+	}
+	if record.UserID != userID {
+		return ErrVerificationForbidden
+	}
+
+	return s.repo.DeleteVerification(ctx, id)
 }
 
 func (s *EmailVerificationService) AdminDeleteVerification(ctx context.Context, id string) error {

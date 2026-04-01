@@ -14,7 +14,7 @@ import (
 )
 
 type VerifyResult struct {
-	Status       string `json:"status"`        // valid, invalid, unknown, greylisted, disposable, error
+	Status       string `json:"status"` // valid, invalid, unknown, greylisted, disposable, error
 	Message      string `json:"message"`
 	Email        string `json:"email"`
 	RequireProbe bool   `json:"require_probe"` // true if EHLO check was denied and needs probe fallback

@@ -14,6 +14,7 @@ interface AuthContextType {
   register: (name: string, email: string, password: string) => Promise<void>;
   logout: () => void;
   setBaseUrl: (url: string) => void;
+  updateApiKey: (apiKey: string) => void;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -83,6 +84,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(storageKeys.baseUrl, url);
   };
 
+  const updateApiKey = (newKey: string) => {
+    setApiKey(newKey);
+    localStorage.setItem(storageKeys.apiKey, newKey);
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -97,6 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         register,
         logout,
         setBaseUrl,
+        updateApiKey,
       }}
     >
       {children}

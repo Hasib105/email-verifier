@@ -99,6 +99,7 @@ func main() {
 	app.Get("/verifications", handler.ListVerificationsHandler(verificationService, userService))
 	app.Get("/verifications/stats", handler.GetVerificationStatsHandler(verificationService, userService))
 	app.Get("/verifications/:id", handler.GetVerificationHandler(verificationService, userService))
+	app.Delete("/verifications/:id", handler.DeleteVerificationHandler(verificationService, userService))
 
 	// SMTP account routes
 	app.Post("/smtp-accounts", handler.CreateSMTPAccountHandler(verificationService, userService))

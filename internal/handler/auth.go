@@ -8,6 +8,31 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
+// @Summary Regenerate User API Key
+// @Description Regenerates the API key for the current user
+// @Tags users
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Router /users/api-key/regenerate [post]
+func RegenerateAPIKeyHandler(userSvc *service.UserService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		user, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		newKey, err := userSvc.RegenerateAPIKey(context.Background(), user.ID)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		return c.JSON(fiber.Map{"api_key": newKey})
+	}
+}
+
 // @Summary Register a new user
 // @Description Creates a new user account
 // @Tags auth
@@ -116,7 +141,7 @@ type AdminUpdateUserRequest struct {
 func AdminUpdateUserHandler(userSvc *service.UserService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		id := c.Params("id")
-		
+
 		var req AdminUpdateUserRequest
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid JSON"})

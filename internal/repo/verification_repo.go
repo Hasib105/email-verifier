@@ -175,9 +175,26 @@ func (r *Repository) ListAllVerifications(ctx context.Context, limit, offset int
 }
 
 func (r *Repository) DeleteVerification(ctx context.Context, id string) error {
-	query := `DELETE FROM verifications WHERE id = $1`
-	if _, err := r.db.ExecContext(ctx, query, id); err != nil {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin delete verification transaction: %w", err)
+	}
+
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM verification_events WHERE verification_id = $1`, id); err != nil {
+		return fmt.Errorf("delete verification events: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM verifications WHERE id = $1`, id); err != nil {
 		return fmt.Errorf("delete verification: %w", err)
 	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete verification transaction: %w", err)
+	}
+
 	return nil
 }

@@ -6,6 +6,7 @@ import { Register } from './pages/Register';
 import { Dashboard } from './pages/Dashboard';
 import { EmailConfig } from './pages/EmailConfig';
 import { Templates } from './pages/Templates';
+import { Playground } from './pages/Playground';
 import { Settings } from './pages/Settings';
 import { EmailStatus } from './pages/EmailStatus';
 import { AdminPanel } from './pages/Admin';
@@ -28,6 +29,7 @@ export default function App() {
         }
       >
         <Route index element={<Dashboard />} />
+        <Route path="playground" element={<Playground />} />
         <Route path="email-config" element={<EmailConfig />} />
         <Route path="templates" element={<Templates />} />
         <Route path="settings" element={<Settings />} />

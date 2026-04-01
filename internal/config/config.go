@@ -50,7 +50,7 @@ func Load() *Config {
 		WebhookTimeout: getEnvDuration("WEBHOOK_TIMEOUT", 10*time.Second),
 
 		CheckInterval:     getEnvDuration("CHECK_INTERVAL", 1*time.Minute),
-		FirstBounceDelay:  getEnvDuration("FIRST_BOUNCE_DELAY", 2*time.Minute),
+		FirstBounceDelay:  getEnvDuration("FIRST_BOUNCE_DELAY", 1*time.Minute),
 		SecondBounceDelay: getEnvDuration("SECOND_BOUNCE_DELAY", 6*time.Hour),
 	}
 }

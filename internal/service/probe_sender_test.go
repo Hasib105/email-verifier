@@ -202,7 +202,7 @@ func TestRenderTemplate_SpecialCharacters(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			template := "Token: {{token}}, Email: {{email}}"
 			result := renderTemplate(template, tc.token, tc.email, tc.sender)
-			
+
 			// Just verify it doesn't panic and contains the expected values
 			if tc.expected {
 				if result == "" {
