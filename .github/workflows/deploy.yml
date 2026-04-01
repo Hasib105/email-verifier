@@ -88,13 +88,18 @@ jobs:
               APP_DIR="$HOME/email-verifier-api"
             fi
 
+            REPO_URL="https://github.com/${{ github.repository }}.git"
+            AUTH_B64="$(printf 'x-access-token:%s' '${{ github.token }}' | base64 | tr -d '\n')"
+            GIT_AUTH_HEADER="AUTHORIZATION: basic ${AUTH_B64}"
+
             if [ ! -d "$APP_DIR/.git" ]; then
-              git clone https://github.com/${{ github.repository }}.git "$APP_DIR"
+              git -c "http.https://github.com/.extraheader=$GIT_AUTH_HEADER" clone "$REPO_URL" "$APP_DIR"
             fi
 
             cd "$APP_DIR"
+            git -c "http.https://github.com/.extraheader=$GIT_AUTH_HEADER" fetch origin main
             git checkout main
-            git pull --ff-only origin main
+            git -c "http.https://github.com/.extraheader=$GIT_AUTH_HEADER" pull --ff-only origin main
 
             if [ ! -f .env ]; then
               cp .env.example .env
