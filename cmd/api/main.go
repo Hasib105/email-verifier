@@ -95,6 +95,7 @@ func main() {
 
 	// Verification routes
 	app.Post("/verify", handler.VerifyHandler(verificationService, userService))
+	app.Post("/verify/batch", handler.BatchVerifyHandler(verificationService, userService))
 	app.Post("/verify/import-csv", handler.ImportCSVHandler(verificationService, userService))
 	app.Get("/verifications", handler.ListVerificationsHandler(verificationService, userService))
 	app.Get("/verifications/stats", handler.GetVerificationStatsHandler(verificationService, userService))

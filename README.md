@@ -19,6 +19,7 @@ A privacy-focused email verification API built with Go and [Fiber](https://gofib
 - **Webhook notifications** — push status transitions to external systems (supports per-user URLs)
 - **SMTP account pool** — attach multiple SMTP accounts per user, auto-pick least-used account, enforce daily limit per account
 - **CSV import API** — bulk verify emails from uploaded CSV files
+- **JSON batch verify API** — verify up to 1000 emails per request
 - **Greylisting detection** — identifies temporary rejections (450/451)
 - **STARTTLS support** — upgrades to TLS when the mail server supports it
 - **API key authentication** — per-user header-based auth
@@ -35,7 +36,7 @@ email-verifier-api/
 ├── cmd/
 │   ├── api/main.go              # API server entrypoint
 │   └── cli/main.go              # CLI tool for user management
-├── docs/                        # Swagger documentation
+├── docs/                        # Swagger docs + API integration guides
 ├── web/                         # React 19 + Vite frontend dashboard
 ├── internal/
 │   ├── config/config.go         # Environment-based configuration
@@ -276,6 +277,60 @@ curl -X POST http://localhost:3000/verify \
 ```
 
 If the same email is verified again, the API returns the stored result immediately with `cached: true`.
+
+### Batch Verify Emails (JSON)
+
+Verify a list of emails in one request.
+
+```
+POST /verify/batch
+Content-Type: application/json
+X-API-Key: <your-api-key>
+```
+
+```bash
+curl -X POST http://localhost:3000/verify/batch \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: evk_your_api_key_here" \
+  -d '{"emails":["alice@example.com","not-an-email","bob@example.com"]}'
+```
+
+```json
+{
+  "total": 3,
+  "accepted": 3,
+  "items": [
+    {
+      "id": "2f06116d-4f3e-4f76-b671-71888fadb5f4",
+      "email": "alice@example.com",
+      "status": "valid",
+      "message": "250 Accepted",
+      "source": "direct-smtp-check",
+      "cached": false,
+      "finalized": true
+    },
+    {
+      "id": "f1d4f67e-54d4-437e-a5d1-3f89c53f6ff9",
+      "email": "not-an-email",
+      "status": "invalid",
+      "message": "invalid syntax",
+      "source": "direct-smtp-check",
+      "cached": false,
+      "finalized": true
+    }
+  ]
+}
+```
+
+Limits:
+
+- Max `1000` emails per batch request.
+- Each item is processed independently; one bad email does not fail the whole batch.
+- `accepted` means successfully processed items, not only `valid` emails.
+
+Integration guide for other services:
+
+- `docs/batch-verify-api.md`
 
 ### Import CSV
 

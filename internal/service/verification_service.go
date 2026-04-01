@@ -159,6 +159,32 @@ func (s *EmailVerificationService) VerifyEmail(ctx context.Context, email string
 	return responseFromRecord(record, false), nil
 }
 
+func (s *EmailVerificationService) VerifyEmailBatch(ctx context.Context, emails []string, user *store.User) ([]VerifyResponse, int) {
+	responses := make([]VerifyResponse, 0, len(emails))
+	accepted := 0
+
+	for _, rawEmail := range emails {
+		email := strings.TrimSpace(rawEmail)
+		result, err := s.VerifyEmail(ctx, email, user)
+		if err != nil {
+			responses = append(responses, VerifyResponse{
+				Email:     strings.ToLower(email),
+				Status:    "error",
+				Message:   err.Error(),
+				Source:    "batch-api",
+				Cached:    false,
+				Finalized: true,
+			})
+			continue
+		}
+
+		responses = append(responses, result)
+		accepted++
+	}
+
+	return responses, accepted
+}
+
 func (s *EmailVerificationService) CreateSMTPAccount(ctx context.Context, req SMTPAccountCreateRequest, userID string) (*store.SMTPAccount, error) {
 	req.Host = normalizeServerHost(req.Host)
 	req.Username = strings.TrimSpace(req.Username)

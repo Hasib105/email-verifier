@@ -12,8 +12,20 @@ import (
 	"io"
 )
 
+const maxBatchVerifyEmails = 1000
+
 type VerifyRequest struct {
 	Email string `json:"email"`
+}
+
+type BatchVerifyRequest struct {
+	Emails []string `json:"emails"`
+}
+
+type BatchVerifyResponse struct {
+	Total    int                      `json:"total"`
+	Accepted int                      `json:"accepted"`
+	Items    []service.VerifyResponse `json:"items"`
 }
 
 type CSVImportResponse struct {
@@ -74,6 +86,46 @@ func VerifyHandler(svc *service.EmailVerificationService, userSvc *service.UserS
 		}
 
 		return c.JSON(result)
+	}
+}
+
+// @Summary Verify a batch of emails
+// @Description Verifies a list of emails in a single request and returns per-email results
+// @Tags verification
+// @Accept json
+// @Produce json
+// @Param X-API-Key header string true "API Key"
+// @Param request body BatchVerifyRequest true "List of emails to verify"
+// @Success 200 {object} BatchVerifyResponse
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Router /verify/batch [post]
+func BatchVerifyHandler(svc *service.EmailVerificationService, userSvc *service.UserService) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		user, err := authenticateUser(c, userSvc)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		var req BatchVerifyRequest
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid JSON"})
+		}
+
+		if len(req.Emails) == 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "emails is required and must contain at least 1 item"})
+		}
+		if len(req.Emails) > maxBatchVerifyEmails {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": fmt.Sprintf("batch limit exceeded: max %d emails per request", maxBatchVerifyEmails)})
+		}
+
+		items, accepted := svc.VerifyEmailBatch(context.Background(), req.Emails, user)
+
+		return c.JSON(BatchVerifyResponse{
+			Total:    len(req.Emails),
+			Accepted: accepted,
+			Items:    items,
+		})
 	}
 }
 
