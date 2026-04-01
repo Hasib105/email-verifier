@@ -9,12 +9,9 @@ import (
 	"email-verifier-api/internal/verifier"
 	"log"
 
-	_ "email-verifier-api/docs"
-
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/recover"
-	"github.com/gofiber/swagger"
 )
 
 // @title Email Verifier API
@@ -29,11 +26,9 @@ func main() {
 	cfg := config.Load()
 
 	// Initialize Verifier
-	// Use a generic domain for EHLO to avoid rejection
 	verifier := verifier.New(
-		"verify@localhost",
-		"localhost",
-		cfg.TorSocksAddr,
+		cfg.VerifierMailFrom,
+		cfg.VerifierEHLODomain,
 		cfg.MaxConcurrency,
 		cfg.Timeout,
 	)
@@ -46,7 +41,7 @@ func main() {
 
 	userService := service.NewUserService(verificationRepo)
 
-	probeSender := service.NewSMTPProbeSender(verificationRepo, cfg.TorSocksAddr)
+	probeSender := service.NewSMTPProbeSender(verificationRepo)
 
 	bounceChecker := service.NewIMAPBounceChecker()
 
@@ -62,6 +57,10 @@ func main() {
 			FirstBounceDelay:  cfg.FirstBounceDelay,
 			SecondBounceDelay: cfg.SecondBounceDelay,
 			CheckInterval:     cfg.CheckInterval,
+			HardResultTTL:     cfg.HardResultTTL,
+			DirectValidTTL:    cfg.DirectValidTTL,
+			ProbeValidTTL:     cfg.ProbeValidTTL,
+			TransientTTL:      cfg.TransientTTL,
 		},
 	)
 
@@ -75,14 +74,19 @@ func main() {
 	app.Use(recover.New())
 	app.Use(cors.New())
 
-	// Swagger
-	app.Get("/swagger/*", swagger.HandlerDefault)
-
 	// Health endpoints
 	app.Get("/health", func(c *fiber.Ctx) error {
-		return c.SendString("OK")
+		health := verifier.HealthSnapshot()
+		return c.JSON(fiber.Map{
+			"status":               "ok",
+			"mode":                 "v1-hardened",
+			"direct_smtp_status":   health.DirectSMTPStatus,
+			"last_checked_at":      health.LastCheckedAt,
+			"message":              health.Message,
+			"verifier_mail_from":   cfg.VerifierMailFrom,
+			"verifier_ehlo_domain": cfg.VerifierEHLODomain,
+		})
 	})
-	app.Get("/check-tor", handler.CheckTorHandler(verifier))
 
 	// Auth routes (no auth required)
 	app.Post("/auth/register", handler.RegisterHandler(userService))
@@ -126,8 +130,7 @@ func main() {
 	admin.Get("/smtp-accounts", handler.AdminListSMTPAccountsHandler(verificationService))
 	admin.Get("/email-templates", handler.AdminListEmailTemplatesHandler(verificationService))
 
-	log.Printf("Starting API on port %s with Tor at %s", cfg.Port, cfg.TorSocksAddr)
-	log.Printf("Swagger UI available at http://localhost:%s/swagger/", cfg.Port)
+	log.Printf("Starting API on port %s with direct SMTP + bounce fallback", cfg.Port)
 	if err := app.Listen(":" + cfg.Port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}

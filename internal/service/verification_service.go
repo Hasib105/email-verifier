@@ -19,6 +19,10 @@ type ServiceConfig struct {
 	FirstBounceDelay  time.Duration
 	SecondBounceDelay time.Duration
 	CheckInterval     time.Duration
+	HardResultTTL     time.Duration
+	DirectValidTTL    time.Duration
+	ProbeValidTTL     time.Duration
+	TransientTTL      time.Duration
 }
 
 var (
@@ -27,14 +31,20 @@ var (
 )
 
 type VerifyResponse struct {
-	ID          string `json:"id"`
-	Email       string `json:"email"`
-	Status      string `json:"status"`
-	Message     string `json:"message"`
-	Source      string `json:"source"`
-	Cached      bool   `json:"cached"`
-	Finalized   bool   `json:"finalized"`
-	NextCheckAt int64  `json:"next_check_at,omitempty"`
+	ID               string `json:"id"`
+	Email            string `json:"email"`
+	Status           string `json:"status"`
+	Message          string `json:"message"`
+	Source           string `json:"source"`
+	Cached           bool   `json:"cached"`
+	Finalized        bool   `json:"finalized"`
+	NextCheckAt      int64  `json:"next_check_at,omitempty"`
+	Confidence       string `json:"confidence"`
+	Deterministic    bool   `json:"deterministic"`
+	ReasonCode       string `json:"reason_code"`
+	VerificationPath string `json:"verification_path"`
+	SignalSummary    string `json:"signal_summary"`
+	ExpiresAt        int64  `json:"expires_at"`
 }
 
 type EmailVerificationService struct {
@@ -74,6 +84,19 @@ func NewEmailVerificationService(
 	webhook WebhookDispatcher,
 	cfg ServiceConfig,
 ) *EmailVerificationService {
+	if cfg.HardResultTTL <= 0 {
+		cfg.HardResultTTL = 7 * 24 * time.Hour
+	}
+	if cfg.DirectValidTTL <= 0 {
+		cfg.DirectValidTTL = 72 * time.Hour
+	}
+	if cfg.ProbeValidTTL <= 0 {
+		cfg.ProbeValidTTL = 24 * time.Hour
+	}
+	if cfg.TransientTTL <= 0 {
+		cfg.TransientTTL = 6 * time.Hour
+	}
+
 	return &EmailVerificationService{
 		verifier:      v,
 		repo:          r,
@@ -99,26 +122,51 @@ func (s *EmailVerificationService) VerifyEmail(ctx context.Context, email string
 	if err != nil {
 		return VerifyResponse{}, err
 	}
+	now := time.Now().Unix()
 	if existing != nil {
-		return responseFromRecord(existing, true), nil
+		if !existing.Finalized && existing.NextCheckAt > 0 {
+			return responseFromRecord(existing, true), nil
+		}
+		if existing.ExpiresAt > now {
+			return responseFromRecord(existing, true), nil
+		}
 	}
 
-	now := time.Now().Unix()
+	recordID := uuid.NewString()
+	createdAt := now
+	firstCheckedAt := now
+	checkCount := 0
+	if existing != nil {
+		recordID = existing.ID
+		createdAt = existing.CreatedAt
+		firstCheckedAt = existing.FirstCheckedAt
+		checkCount = existing.CheckCount
+	}
+
 	directResult := s.verifier.Verify(email)
 	record := &store.VerificationRecord{
-		ID:             uuid.NewString(),
-		Email:          email,
-		UserID:         userID,
-		Status:         directResult.Status,
-		Message:        directResult.Message,
-		Source:         "direct-smtp-check",
-		FirstCheckedAt: now,
-		LastCheckedAt:  now,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		ID:               recordID,
+		Email:            email,
+		UserID:           userID,
+		Status:           directResult.Status,
+		Message:          directResult.Message,
+		Source:           "direct-smtp-check",
+		Confidence:       "low",
+		Deterministic:    directResult.Deterministic,
+		ReasonCode:       directResult.ReasonCode,
+		VerificationPath: "direct_smtp",
+		SignalSummary:    summarizeLocalSignals(email, directResult.SignalSummary),
+		ExpiresAt:        now + int64(s.cfg.TransientTTL.Seconds()),
+		CheckCount:       checkCount,
+		Finalized:        true,
+		FirstCheckedAt:   firstCheckedAt,
+		LastCheckedAt:    now,
+		CreatedAt:        createdAt,
+		UpdatedAt:        now,
 	}
 
-	// Use RequireProbe from verifier result, or fallback to status-based check
+	s.applyDirectMetadata(record, directResult)
+
 	requiresFallback := directResult.RequireProbe || directResult.Status == "error" || directResult.Status == "unknown" || directResult.Status == "greylisted"
 	if requiresFallback {
 		token := uuid.NewString()
@@ -128,17 +176,27 @@ func (s *EmailVerificationService) VerifyEmail(ctx context.Context, email string
 		accountID, err := s.probeSender.SendProbeForUser(ctx, email, token, userID)
 		if err != nil {
 			record.Status = "error"
-			record.Message = fmt.Sprintf("fallback probe send failed: %v", err)
+			record.Message = fmt.Sprintf("probe send failed: %v", err)
+			record.Confidence = "low"
+			record.Deterministic = false
+			record.ReasonCode = "probe_send_failed"
+			record.VerificationPath = probePathForReason(directResult.ReasonCode)
+			record.SignalSummary = summarizeLocalSignals(email, "Direct SMTP was inconclusive and the fallback probe could not be sent.")
+			record.ExpiresAt = now + int64(s.cfg.TransientTTL.Seconds())
 			record.Finalized = true
 		} else {
 			record.SMTPAccountID = accountID
 			record.Status = "pending_bounce_check"
-			record.Message = fmt.Sprintf("probe sent via smtp account %s; first IMAP bounce check scheduled in %s", accountID, s.cfg.FirstBounceDelay)
+			record.Message = fmt.Sprintf("probe sent via smtp account %s; waiting for bounce window", accountID)
+			record.Confidence = "low"
+			record.Deterministic = false
+			record.ReasonCode = "probe_sent_waiting_bounce"
+			record.VerificationPath = probePathForReason(directResult.ReasonCode)
+			record.SignalSummary = summarizeLocalSignals(email, probeQueuedSummary(record, accountID))
 			record.NextCheckAt = time.Now().Add(s.cfg.FirstBounceDelay).Unix()
+			record.ExpiresAt = now + int64(s.cfg.TransientTTL.Seconds())
 			record.Finalized = false
 		}
-	} else {
-		record.Finalized = true
 	}
 
 	if err := s.repo.UpsertVerification(ctx, record); err != nil {
@@ -168,12 +226,17 @@ func (s *EmailVerificationService) VerifyEmailBatch(ctx context.Context, emails 
 		result, err := s.VerifyEmail(ctx, email, user)
 		if err != nil {
 			responses = append(responses, VerifyResponse{
-				Email:     strings.ToLower(email),
-				Status:    "error",
-				Message:   err.Error(),
-				Source:    "batch-api",
-				Cached:    false,
-				Finalized: true,
+				Email:            strings.ToLower(email),
+				Status:           "error",
+				Message:          err.Error(),
+				Source:           "batch-api",
+				Cached:           false,
+				Finalized:        true,
+				Confidence:       "low",
+				Deterministic:    false,
+				ReasonCode:       "internal_error",
+				VerificationPath: "direct_smtp",
+				SignalSummary:    "Batch verification failed before a verification record could be stored.",
 			})
 			continue
 		}
@@ -467,7 +530,7 @@ func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store
 		imapHost = inferIMAPHost(account.Host)
 	}
 
-	bounced, reason, err := s.bounceChecker.HasBounce(ctx, IMAPConfig{
+	bounced, reason, matchKind, err := s.bounceChecker.HasBounce(ctx, IMAPConfig{
 		Host:     imapHost,
 		Port:     account.IMAPPort,
 		Username: account.Username,
@@ -480,6 +543,7 @@ func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store
 	rec.LastCheckedAt = now
 	rec.UpdatedAt = now
 	rec.CheckCount++
+	rec.ExpiresAt = now + int64(s.cfg.TransientTTL.Seconds())
 
 	event := "verify.check.first.no_bounce"
 	if checkNumber >= 2 {
@@ -488,14 +552,24 @@ func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store
 
 	if err != nil {
 		if checkNumber == 1 {
-			rec.Status = "error"
-			rec.Message = fmt.Sprintf("first IMAP bounce check failed: %v; second check will still run", err)
+			rec.Status = "pending_bounce_check"
+			rec.Message = fmt.Sprintf("first IMAP bounce check failed: %v; retry scheduled", err)
+			rec.Confidence = "low"
+			rec.Deterministic = false
+			rec.ReasonCode = "imap_check_retrying"
+			rec.VerificationPath = ensureProbePath(rec.VerificationPath)
+			rec.SignalSummary = summarizeLocalSignals(rec.Email, "Bounce evidence was unavailable during the first IMAP check, so the verification remains pending.")
 			rec.NextCheckAt = time.Now().Add(s.cfg.SecondBounceDelay).Unix()
 			rec.Finalized = false
 			event = "verify.check.first.error"
 		} else {
 			rec.Status = "error"
 			rec.Message = fmt.Sprintf("second IMAP bounce check failed: %v", err)
+			rec.Confidence = "low"
+			rec.Deterministic = false
+			rec.ReasonCode = "imap_check_failed_final"
+			rec.VerificationPath = ensureProbePath(rec.VerificationPath)
+			rec.SignalSummary = summarizeLocalSignals(rec.Email, "Bounce verification failed across the full check window, so mailbox validity remains unresolved.")
 			rec.NextCheckAt = 0
 			rec.Finalized = true
 			event = "verify.check.second.error"
@@ -503,20 +577,37 @@ func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store
 	} else if bounced {
 		rec.Status = "bounced"
 		rec.Message = reason
+		rec.Confidence = "high"
+		rec.Deterministic = true
+		rec.ReasonCode = bounceReasonCode(matchKind)
+		rec.VerificationPath = ensureProbePath(rec.VerificationPath)
+		rec.SignalSummary = summarizeLocalSignals(rec.Email, bounceSignalSummary(matchKind))
 		rec.NextCheckAt = 0
+		rec.ExpiresAt = now + int64(s.cfg.HardResultTTL.Seconds())
 		rec.Finalized = true
 		event = "verify.bounced"
 	} else {
 		if checkNumber == 1 {
-			rec.Status = "valid"
-			rec.Message = "no bounce detected in first IMAP check; second check scheduled"
+			rec.Status = "pending_bounce_check"
+			rec.Message = "no bounce observed in the first check window; second check scheduled"
+			rec.Confidence = "low"
+			rec.Deterministic = false
+			rec.ReasonCode = "no_bounce_first_window"
+			rec.VerificationPath = ensureProbePath(rec.VerificationPath)
+			rec.SignalSummary = summarizeLocalSignals(rec.Email, "No bounce has been observed in the first check window. This is not treated as mailbox proof.")
 			rec.NextCheckAt = time.Now().Add(s.cfg.SecondBounceDelay).Unix()
 			rec.Finalized = false
 			event = "verify.check.first.no_bounce"
 		} else {
 			rec.Status = "valid"
-			rec.Message = "no bounce detected in second IMAP check"
+			rec.Message = "no bounce observed within the configured verification window"
+			rec.Confidence = "low"
+			rec.Deterministic = false
+			rec.ReasonCode = "no_bounce_second_window"
+			rec.VerificationPath = ensureProbePath(rec.VerificationPath)
+			rec.SignalSummary = summarizeLocalSignals(rec.Email, "No bounce was observed across both check windows. This remains a heuristic signal rather than confirmed mailbox existence.")
 			rec.NextCheckAt = 0
+			rec.ExpiresAt = now + int64(s.cfg.ProbeValidTTL.Seconds())
 			rec.Finalized = true
 			event = "verify.check.second.no_bounce"
 		}
@@ -529,7 +620,6 @@ func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store
 		log.Printf("warning: failed to save event: %v", err)
 	}
 
-	// Get user webhook URL if user exists
 	webhookURL := ""
 	if rec.UserID != "" {
 		user, err := s.repo.GetUserByID(ctx, rec.UserID)
@@ -546,13 +636,19 @@ func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store
 
 func responseFromRecord(rec *store.VerificationRecord, cached bool) VerifyResponse {
 	resp := VerifyResponse{
-		ID:        rec.ID,
-		Email:     rec.Email,
-		Status:    rec.Status,
-		Message:   rec.Message,
-		Source:    rec.Source,
-		Cached:    cached,
-		Finalized: rec.Finalized,
+		ID:               rec.ID,
+		Email:            rec.Email,
+		Status:           rec.Status,
+		Message:          rec.Message,
+		Source:           rec.Source,
+		Cached:           cached,
+		Finalized:        rec.Finalized,
+		Confidence:       rec.Confidence,
+		Deterministic:    rec.Deterministic,
+		ReasonCode:       rec.ReasonCode,
+		VerificationPath: rec.VerificationPath,
+		SignalSummary:    rec.SignalSummary,
+		ExpiresAt:        rec.ExpiresAt,
 	}
 	if rec.NextCheckAt > 0 {
 		resp.NextCheckAt = rec.NextCheckAt
@@ -586,16 +682,130 @@ func (s *EmailVerificationService) AdminDeleteVerification(ctx context.Context, 
 func (s *EmailVerificationService) SendTestWebhook(ctx context.Context, webhookURL string) error {
 	now := time.Now().Unix()
 	testRecord := &store.VerificationRecord{
-		ID:             "test-" + uuid.NewString()[:8],
-		Email:          "test@example.com",
-		Status:         "valid",
-		Message:        "This is a test webhook notification",
-		Source:         "test",
-		FirstCheckedAt: now,
-		LastCheckedAt:  now,
-		Finalized:      true,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		ID:               "test-" + uuid.NewString()[:8],
+		Email:            "test@example.com",
+		Status:           "valid",
+		Message:          "This is a test webhook notification",
+		Source:           "test",
+		Confidence:       "low",
+		Deterministic:    false,
+		ReasonCode:       "webhook_test",
+		VerificationPath: "probe_bounce",
+		SignalSummary:    "Example payload showing additive evidence fields.",
+		ExpiresAt:        now + int64(s.cfg.TransientTTL.Seconds()),
+		FirstCheckedAt:   now,
+		LastCheckedAt:    now,
+		Finalized:        true,
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 	return s.webhook.SendWithURL(ctx, "test.webhook", testRecord, webhookURL)
+}
+
+func (s *EmailVerificationService) applyDirectMetadata(rec *store.VerificationRecord, result verifier.VerifyResult) {
+	rec.VerificationPath = "direct_smtp"
+	rec.SignalSummary = summarizeLocalSignals(rec.Email, result.SignalSummary)
+
+	switch rec.Status {
+	case "invalid":
+		rec.Confidence = "high"
+		rec.Deterministic = true
+		rec.ExpiresAt = rec.LastCheckedAt + int64(s.cfg.HardResultTTL.Seconds())
+	case "disposable":
+		rec.Confidence = "high"
+		rec.Deterministic = true
+		rec.ExpiresAt = rec.LastCheckedAt + int64(s.cfg.HardResultTTL.Seconds())
+	case "valid":
+		rec.Confidence = "medium"
+		rec.Deterministic = false
+		rec.ExpiresAt = rec.LastCheckedAt + int64(s.cfg.DirectValidTTL.Seconds())
+	case "greylisted", "unknown", "error":
+		rec.Confidence = "low"
+		rec.Deterministic = false
+		rec.ExpiresAt = rec.LastCheckedAt + int64(s.cfg.TransientTTL.Seconds())
+	default:
+		rec.Confidence = "low"
+		rec.Deterministic = false
+		rec.ExpiresAt = rec.LastCheckedAt + int64(s.cfg.TransientTTL.Seconds())
+	}
+}
+
+func summarizeLocalSignals(email, base string) string {
+	local, domain, _ := strings.Cut(strings.ToLower(email), "@")
+	notes := []string{}
+
+	if isConsumerMailboxDomain(domain) {
+		notes = append(notes, "Consumer mailbox domain.")
+	}
+	if isRoleMailbox(local) {
+		notes = append(notes, "Role-based local part.")
+	}
+
+	if len(notes) == 0 {
+		return base
+	}
+	if base == "" {
+		return strings.Join(notes, " ")
+	}
+	return base + " " + strings.Join(notes, " ")
+}
+
+func probeQueuedSummary(rec *store.VerificationRecord, accountID string) string {
+	return fmt.Sprintf("Direct SMTP evidence was insufficient, so a probe was sent via SMTP account %s and the system is waiting for bounce evidence.", accountID)
+}
+
+func probePathForReason(reasonCode string) string {
+	switch reasonCode {
+	case "direct_path_unavailable":
+		return "probe_bounce"
+	default:
+		return "hybrid"
+	}
+}
+
+func ensureProbePath(path string) string {
+	if path == "" || path == "direct_smtp" {
+		return "hybrid"
+	}
+	return path
+}
+
+func bounceReasonCode(matchKind string) string {
+	switch matchKind {
+	case "token_match":
+		return "bounce_token_match"
+	case "recipient_match":
+		return "bounce_recipient_match"
+	default:
+		return "bounce_generic_dsn"
+	}
+}
+
+func bounceSignalSummary(matchKind string) string {
+	switch matchKind {
+	case "token_match":
+		return "Bounce evidence matched the unique probe token."
+	case "recipient_match":
+		return "Bounce evidence matched the recipient address."
+	default:
+		return "Bounce evidence matched a generic delivery-status notification."
+	}
+}
+
+func isConsumerMailboxDomain(domain string) bool {
+	switch strings.ToLower(domain) {
+	case "gmail.com", "googlemail.com", "hotmail.com", "icloud.com", "me.com", "outlook.com", "yahoo.com":
+		return true
+	default:
+		return false
+	}
+}
+
+func isRoleMailbox(local string) bool {
+	switch strings.ToLower(local) {
+	case "admin", "billing", "contact", "hello", "info", "legal", "sales", "support", "team":
+		return true
+	default:
+		return false
+	}
 }

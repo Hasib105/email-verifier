@@ -1,63 +1,56 @@
 # Email Verifier API
 
-A privacy-focused email verification API built with Go and [Fiber](https://gofiber.io/), routing all SMTP checks through the **Tor network** to protect your server's IP address.
+Email verification API built with Go and [Fiber](https://gofiber.io/). This hardened V1 keeps the existing probe-and-bounce workflow, but removes Tor, makes direct SMTP results more conservative, and exposes confidence and evidence fields so weak signals are no longer presented as hard proof.
+
+## What Changed In Hardened V1
+
+- Tor is fully removed from runtime, config, and deployment.
+- Direct SMTP is still attempted first when the host can reach recipient MX hosts on port 25.
+- Direct acceptance is treated as a bounded signal, not guaranteed mailbox proof.
+- Probe-and-bounce fallback remains in place for inconclusive cases.
+- First no-bounce window no longer upgrades a record to `valid`.
+- Results now include `confidence`, `deterministic`, `reason_code`, `verification_path`, `signal_summary`, and `expires_at`.
+- Cached results expire and are re-verified instead of being reused indefinitely.
 
 ## Features
 
-- **Multi-tenant user management** — each user gets their own API key and isolated resources
-- **Per-user webhook URLs** — referral/notification callbacks specific to each user
-- **Tor-routed SMTP verification** — all outbound connections go through Tor SOCKS5 proxy
-- **Syntax validation** — rejects malformed email addresses
-- **Disposable domain detection** — flags throwaway email providers
-- **MX record lookup** — checks that the domain can receive mail
-- **SMTP RCPT TO verification** — confirms the mailbox exists on the mail server
-- **Fallback real SMTP probe over Tor** — on uncertain result, sends a real probe email through Tor and tracks bounce outcome
-- **Single scheduled bounce recheck** — automatic one-time bounce check after 6 hours
-- **Persistent verification cache with sqlx** — stores status/history and returns cached result for repeated requests
-- **PostgreSQL-backed storage** — uses latest PostgreSQL for verifications, events, and SMTP account usage tracking
-- **IMAP bounce detection** — checks your mailbox for DSN/bounce messages matching token/recipient
-- **Webhook notifications** — push status transitions to external systems (supports per-user URLs)
-- **SMTP account pool** — attach multiple SMTP accounts per user, auto-pick least-used account, enforce daily limit per account
-- **CSV import API** — bulk verify emails from uploaded CSV files
-- **JSON batch verify API** — verify up to 1000 emails per request
-- **Greylisting detection** — identifies temporary rejections (450/451)
-- **STARTTLS support** — upgrades to TLS when the mail server supports it
-- **API key authentication** — per-user header-based auth
-- **Concurrency control** — limits simultaneous Tor connections
-- **Docker Compose deployment** — one-command setup with Tor sidecar
-- **Swagger API documentation** — interactive API docs at `/swagger/`
-- **Terminal CLI for signup** — create users via command line
-- **React dashboard** — modern frontend for managing verification, SMTP, templates, and webhook settings
+- Multi-tenant user management with per-user API keys and webhook URLs
+- Direct SMTP verification with syntax checks, disposable detection, MX lookup, A/AAAA fallback, STARTTLS, and provider-aware result handling
+- SMTP probe fallback with scheduled IMAP bounce checks
+- SMTP account pool with per-account daily limits
+- Email templates for probe content
+- Verification history, events, webhook delivery, CSV import, and batch verification
+- React dashboard for verification, history, SMTP account management, templates, and admin views
 
-## Project Structure
+## Status Model
 
-```
-email-verifier-api/
-├── cmd/
-│   ├── api/main.go              # API server entrypoint
-│   └── cli/main.go              # CLI tool for user management
-├── docs/                        # Swagger docs + API integration guides
-├── web/                         # React 19 + Vite frontend dashboard
-├── internal/
-│   ├── config/config.go         # Environment-based configuration
-│   ├── handler/verify.go        # HTTP handlers
-│   ├── repo/                    # Database repositories
-│   ├── service/                 # Business logic services
-│   ├── store/models.go          # Data models
-│   └── verifier/                # SMTP verification logic
-├── Dockerfile                   # Multi-stage Go build
-├── tor.Dockerfile               # Alpine-based Tor proxy
-├── docker-compose.yml           # Full stack orchestration
-├── torrc                        # Tor daemon configuration
-├── go.mod / go.sum              # Go module files
-└── tools.go                     # Build tool dependencies
-```
+The public statuses remain compatible with V1:
+
+| Status | Meaning |
+| --- | --- |
+| `valid` | Direct SMTP accepted on a non-strict provider, or no bounce was observed across both configured probe windows |
+| `invalid` | Syntax failure, no mail routing, or explicit hard SMTP rejection |
+| `disposable` | Known disposable mailbox domain |
+| `greylisted` | Recipient MX returned a temporary failure and the system queued probe fallback |
+| `pending_bounce_check` | Probe was sent and bounce evidence is still pending |
+| `bounced` | Bounce evidence was found and matched the probe |
+| `unknown` | Direct SMTP was policy-blocked, verification-disabled, or otherwise inconclusive |
+| `error` | Verification infrastructure failed or probe fallback could not complete |
+
+The new additive evidence fields make those statuses safer to interpret:
+
+- `confidence`: `high`, `medium`, or `low`
+- `deterministic`: whether the result comes from a hard signal
+- `reason_code`: machine-readable primary explanation
+- `verification_path`: `direct_smtp`, `probe_bounce`, or `hybrid`
+- `signal_summary`: short evidence summary meant for users and logs
+- `expires_at`: Unix timestamp after which the cached result should be refreshed
 
 ## Quick Start
 
 ### Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/) & Docker Compose
+- Docker and Docker Compose
 
 ### Run
 
@@ -65,65 +58,22 @@ email-verifier-api/
 docker-compose up -d --build
 ```
 
-This starts three containers:
+This starts:
 
 | Service | Description | Port |
-|---------|-------------|------|
-| `postgres` | PostgreSQL database | 5432 (internal) |
-| `tor` | Tor SOCKS5 proxy | 9050 (internal) |
-| `api` | Email verifier API | 3000 (exposed) |
+| --- | --- | --- |
+| `postgres` | PostgreSQL database | internal |
+| `api` | Email verifier API | `3000` |
+| `web` | React dashboard | `80` |
 
-The API waits for Tor to become healthy before starting.
-
-### Create a User (Terminal Signup)
-
-Build and run the CLI tool to create users:
+### Create A User
 
 ```bash
-# Build the CLI
 go build -o verifier-cli ./cmd/cli
-
-# Run signup
 ./verifier-cli signup
 ```
 
-Interactive prompts:
-```
-=== Email Verifier - User Signup ===
-
-Enter your name: John Doe
-Enter your email: john@example.com
-Enter webhook URL (optional, press Enter to skip): https://myapp.com/webhooks/email
-
-=== User Created Successfully! ===
-
-User ID:     a1b2c3d4-e5f6-7890-abcd-ef1234567890
-Name:        John Doe
-Email:       john@example.com
-Webhook URL: https://myapp.com/webhooks/email
-
-=== Your API Key (save this securely!) ===
-
-  evk_abc123def456...
-
-Use this API key in the X-API-Key header for all API requests.
-```
-
-### List Users
-
-```bash
-./verifier-cli list-users
-```
-
-### Stop
-
-```bash
-docker-compose down
-```
-
-### Frontend Dashboard (React 19)
-
-Run the API first, then start the web dashboard:
+### Frontend
 
 ```bash
 cd web
@@ -132,368 +82,178 @@ npm install
 npm run dev
 ```
 
-Open: `http://localhost:5173`
+Open [http://localhost:5173](http://localhost:5173).
 
-Production build:
+## Core API
 
-```bash
-npm run build
-npm run preview
-```
+### Health
 
-### Env + Deploy Helpers
-
-- Copy `.env.example` to `.env` and set real values.
-- See `deploy/README.md` for deploy and CI/CD helpers.
-- Upload all `.env` keys to GitHub Secrets with:
-
-```powershell
-pwsh -File ./deploy/set-github-secrets.ps1 -EnvFile ./.env
-```
-
-## API Documentation
-
-Interactive Swagger UI is available at:
-
-```
-http://localhost:3000/swagger/
-```
-
-## API Endpoints
-
-### Health Check
-
-```
+```http
 GET /health
 ```
 
-```bash
-curl http://localhost:3000/health
-# OK
-```
-
-### Tor Connectivity Check
-
-Verifies that outbound traffic is routed through Tor.
-
-```
-GET /check-tor
-```
-
-```bash
-curl http://localhost:3000/check-tor
-```
+Example:
 
 ```json
 {
-  "is_tor": true,
-  "ip": "192.42.116.181",
-  "message": "Traffic is routed through Tor network"
-}
-```
-
-### Get Current User
-
-```
-GET /users/me
-X-API-Key: <your-api-key>
-```
-
-```bash
-curl http://localhost:3000/users/me \
-  -H "X-API-Key: evk_your_api_key_here"
-```
-
-### Update Webhook URL
-
-```
-PUT /users/webhook
-Content-Type: application/json
-X-API-Key: <your-api-key>
-```
-
-```json
-{
-  "webhook_url": "https://myapp.com/webhooks/email-verified"
+  "status": "ok",
+  "mode": "v1-hardened",
+  "direct_smtp_status": "available",
+  "last_checked_at": 1775000000,
+  "message": "250 recipient accepted",
+  "verifier_mail_from": "verify@localhost",
+  "verifier_ehlo_domain": "localhost"
 }
 ```
 
 ### Verify Email
 
-```
+```http
 POST /verify
 Content-Type: application/json
 X-API-Key: <your-api-key>
 ```
 
-```bash
-curl -X POST http://localhost:3000/verify \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: evk_your_api_key_here" \
-  -d '{"email": "user@example.com"}'
+```json
+{
+  "email": "user@example.com"
+}
 ```
 
-#### Response Statuses
+Example direct result:
 
-| Status | Meaning |
-|--------|---------|
-| `valid` | Mailbox exists (250 accepted) |
-| `invalid` | Bad syntax, no MX records, or mailbox rejected (550-559) |
-| `disposable` | Known disposable/temporary email domain |
-| `greylisted` | Server returned temporary rejection (450/451) — retry later |
-| `pending_bounce_check` | Fallback probe sent; waiting for first/follow-up IMAP bounce checks |
-| `bounced` | Bounce detected in mailbox; address considered invalid |
-| `accepted_no_bounce` | No bounce found after follow-up window |
-| `unknown` | Could not determine validity |
-| `error` | Connection or SMTP protocol failure |
-
-#### Example Responses
-
-**Valid email:**
 ```json
 {
   "id": "fe632dc1-95af-4dc6-9a88-a1543f6e595f",
   "status": "valid",
-  "message": "250 Accepted",
-  "email": "real-user@example.com",
+  "message": "250 recipient accepted",
+  "email": "user@example.com",
   "source": "direct-smtp-check",
   "cached": false,
-  "finalized": true
+  "finalized": true,
+  "confidence": "medium",
+  "deterministic": false,
+  "reason_code": "direct_accept_non_strict",
+  "verification_path": "direct_smtp",
+  "signal_summary": "Recipient MX accepted RCPT on a non-strict provider.",
+  "expires_at": 1775259200
 }
 ```
 
-**Pending fallback result:**
+Example fallback result:
+
 ```json
 {
   "id": "5f7ea2f8-cf04-4888-b8d8-e50ef9040ac5",
   "status": "pending_bounce_check",
-  "message": "probe sent; waiting for bounce check",
+  "message": "probe sent via smtp account smtp-123; waiting for bounce window",
   "email": "user@example.com",
   "source": "smtp-probe",
   "cached": false,
   "finalized": false,
-  "next_check_at": 1774879200
+  "next_check_at": 1774879200,
+  "confidence": "low",
+  "deterministic": false,
+  "reason_code": "probe_sent_waiting_bounce",
+  "verification_path": "hybrid",
+  "signal_summary": "Direct SMTP evidence was insufficient, so a probe was sent via SMTP account smtp-123 and the system is waiting for bounce evidence.",
+  "expires_at": 1774900800
 }
 ```
 
-If the same email is verified again, the API returns the stored result immediately with `cached: true`.
+### Batch Verify
 
-### Batch Verify Emails (JSON)
-
-Verify a list of emails in one request.
-
-```
+```http
 POST /verify/batch
 Content-Type: application/json
 X-API-Key: <your-api-key>
 ```
 
-```bash
-curl -X POST http://localhost:3000/verify/batch \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: evk_your_api_key_here" \
-  -d '{"emails":["alice@example.com","not-an-email","bob@example.com"]}'
-```
+Body:
 
 ```json
 {
-  "total": 3,
-  "accepted": 3,
-  "items": [
-    {
-      "id": "2f06116d-4f3e-4f76-b671-71888fadb5f4",
-      "email": "alice@example.com",
-      "status": "valid",
-      "message": "250 Accepted",
-      "source": "direct-smtp-check",
-      "cached": false,
-      "finalized": true
-    },
-    {
-      "id": "f1d4f67e-54d4-437e-a5d1-3f89c53f6ff9",
-      "email": "not-an-email",
-      "status": "invalid",
-      "message": "invalid syntax",
-      "source": "direct-smtp-check",
-      "cached": false,
-      "finalized": true
-    }
-  ]
+  "emails": ["alice@example.com", "bob@example.com"]
 }
 ```
 
-Limits:
+Batch size limit: `1000`.
 
-- Max `1000` emails per batch request.
-- Each item is processed independently; one bad email does not fail the whole batch.
-- `accepted` means successfully processed items, not only `valid` emails.
+### CSV Import
 
-Integration guide for other services:
-
-- `docs/batch-verify-api.md`
-
-### Import CSV
-
-Upload CSV where first column is email.
-
-```
+```http
 POST /verify/import-csv
 Content-Type: multipart/form-data
 X-API-Key: <your-api-key>
 ```
 
-```bash
-curl -X POST http://localhost:3000/verify/import-csv \
-  -H "X-API-Key: evk_your_api_key_here" \
-  -F "file=@emails.csv"
-```
+### Verification History
 
-### Add SMTP Account
+- `GET /verifications`
+- `GET /verifications/:id`
+- `GET /verifications/stats`
 
-```
-POST /smtp-accounts
-Content-Type: application/json
-X-API-Key: <your-api-key>
-```
+### SMTP Accounts And Templates
 
-```json
-{
-  "host": "smtp.gmail.com",
-  "port": 587,
-  "username": "you@example.com",
-  "password": "app-password",
-  "sender": "you@example.com",
-  "imap_host": "imap.gmail.com",
-  "imap_port": 993,
-  "imap_mailbox": "INBOX",
-  "daily_limit": 100,
-  "active": true
-}
-```
+- `POST /smtp-accounts`
+- `GET /smtp-accounts`
+- `GET /smtp-accounts/:id`
+- `PUT /smtp-accounts/:id`
+- `DELETE /smtp-accounts/:id`
+- `POST /email-templates`
+- `GET /email-templates`
+- `GET /email-templates/:id`
+- `PUT /email-templates/:id`
+- `DELETE /email-templates/:id`
 
-`username` and `password` are shared for both SMTP sending and IMAP bounce-check login.
+## Probe And Bounce Semantics
 
-### List SMTP Accounts
+Hardened V1 still supports the legacy fallback flow, but its interpretation is stricter:
 
-```
-GET /smtp-accounts
-X-API-Key: <your-api-key>
-```
+1. Direct SMTP runs first.
+2. If direct SMTP is inconclusive, policy-blocked, greylisted, or unavailable, the service sends a probe through a configured SMTP account.
+3. The first no-bounce check keeps the record in `pending_bounce_check`.
+4. A detected bounce finalizes as `bounced`.
+5. Only after the second no-bounce window does the record become `valid`, with `confidence=low` and `deterministic=false`.
 
-Returns each account with `sent_today` and `daily_limit`.
-
-### Create Email Template
-
-```
-POST /email-templates
-Content-Type: application/json
-X-API-Key: <your-api-key>
-```
-
-```json
-{
-  "name": "default-template",
-  "subject_template": "Email verification probe {{token}}",
-  "body_template": "Hello,\n\nVerification probe for {{email}}.\nToken: {{token}}\nSender: {{sender}}\n",
-  "active": true
-}
-```
-
-Supported placeholders: `{{token}}`, `{{email}}`, `{{sender}}`.
-
-### List Email Templates
-
-```
-GET /email-templates
-X-API-Key: <your-api-key>
-```
-
-**Invalid syntax:**
-```json
-{
-  "status": "invalid",
-  "message": "invalid syntax",
-  "email": "not-an-email"
-}
-```
-
-**Disposable domain:**
-```json
-{
-  "status": "disposable",
-  "message": "disposable domain detected",
-  "email": "test@mailinator.com"
-}
-```
-
-## Webhook Notifications
-
-Webhooks are sent to the user's configured webhook URL for these events:
-
-| Event | Description |
-|-------|-------------|
-| `verify.created` | New verification request initiated |
-| `verify.bounced` | Bounce detected during scheduled check |
-| `verify.check.no_bounce` | Scheduled check completed with no bounce |
-| `verify.check.error` | Error during scheduled bounce check |
-
-**Webhook Payload:**
-```json
-{
-  "event": "verify.bounced",
-  "id": "ver-123",
-  "email": "user@example.com",
-  "status": "bounced",
-  "message": "Mail delivery failed",
-  "source": "smtp-probe",
-  "user_id": "user-456",
-  "check_count": 1,
-  "finalized": true,
-  "checked_at": 1711800000
-}
-```
+The absence of a bounce is treated as heuristic evidence, not mailbox proof.
 
 ## Configuration
 
-All settings are configured via environment variables (set in `docker-compose.yml`):
-
 | Variable | Default | Description |
-|----------|---------|-------------|
+| --- | --- | --- |
 | `PORT` | `3000` | API listen port |
-| `TOR_SOCKS_ADDR` | `tor:9050` | Tor SOCKS5 proxy address |
-| `MAX_CONCURRENCY` | `5` | Max simultaneous SMTP connections |
-| `DATABASE_DSN` | *(empty)* | Full PostgreSQL connection string override (optional) |
+| `MAX_CONCURRENCY` | `5` | Max concurrent direct SMTP checks |
+| `TIMEOUT` | `20s` | Timeout for direct SMTP attempts |
+| `VERIFIER_MAIL_FROM` | `verify@localhost` | Envelope sender used for direct SMTP callouts |
+| `VERIFIER_EHLO_DOMAIN` | `localhost` | EHLO hostname used for direct SMTP callouts |
+| `DATABASE_DSN` | empty | Full PostgreSQL DSN override |
 | `DB_HOST` | `postgres` | PostgreSQL host |
-| `DB_PORT` | `5432` | PostgreSQL port |
+| `DB_PORT` | `15432` | PostgreSQL port |
 | `DB_USER` | `postgres` | PostgreSQL username |
 | `DB_PASSWORD` | `postgres` | PostgreSQL password |
 | `DB_NAME` | `verifier` | PostgreSQL database name |
 | `DB_SSLMODE` | `disable` | PostgreSQL SSL mode |
-| `WEBHOOK_URL` | *(empty)* | Default webhook endpoint (per-user URLs take precedence) |
-| `WEBHOOK_TIMEOUT` | `10s` | HTTP timeout for webhook delivery |
+| `WEBHOOK_URL` | empty | Default webhook URL |
+| `WEBHOOK_TIMEOUT` | `10s` | Webhook HTTP timeout |
 | `CHECK_INTERVAL` | `1m` | Scheduler tick interval |
-| `SECOND_BOUNCE_DELAY` | `6h` | Delay before single bounce recheck |
+| `FIRST_BOUNCE_DELAY` | `2m` | Delay before first IMAP bounce check |
+| `SECOND_BOUNCE_DELAY` | `6h` | Delay before second IMAP bounce check |
+| `HARD_RESULT_TTL` | `168h` | TTL for `invalid`, `bounced`, and `disposable` |
+| `DIRECT_VALID_TTL` | `72h` | TTL for direct `valid` results |
+| `PROBE_VALID_TTL` | `24h` | TTL for probe-derived `valid` results |
+| `TRANSIENT_RESULT_TTL` | `6h` | TTL for `unknown`, `greylisted`, `error`, and pending states |
 
-## How It Works
+## Deployment Notes
 
-1. **User authentication** — validates API key from header, returns user context
-2. **Syntax check** — validates email format with regex
-3. **Disposable check** — compares domain against a known list
-4. **MX lookup** — resolves the domain's mail exchange records
-5. **SMTP connection via Tor** — connects to the mail server's port 25 through the Tor SOCKS5 proxy
-6. **EHLO + STARTTLS** — negotiates with the mail server, upgrading to TLS if available
-7. **MAIL FROM + RCPT TO** — sends the sender and recipient commands to check if the mailbox exists
-8. **Fallback (if uncertain)** — sends a real SMTP probe email and marks status `pending_bounce_check`
-9. **Background scheduler** — performs one IMAP bounce recheck after 6 hours
-10. **SMTP account selection** — picks active account for user with lowest `sent_today` under daily limit (default 100)
-11. **Template rendering** — if an active template exists for user, it is used for subject/body
-12. **Persistence + webhook** — stores status/events and notifies user's webhook URL
+- This branch no longer includes a Tor sidecar.
+- Direct SMTP still depends on the host being able to reach recipient MX servers on port 25.
+- If direct SMTP is blocked by infrastructure, the system degrades to probe-first behavior and keeps the result grounded with low-confidence metadata.
 
-## Notes
+## Additional Docs
 
-- **Rate limiting by mail servers:** Some providers (e.g., Gmail) may reject connections from Tor exit nodes. This is expected behavior — the API will return an `error` status with the server's rejection message.
-- **Tor is slow:** SMTP verification through Tor takes longer than direct connections (typically 10-45 seconds). The concurrency limiter prevents overloading.
-- **Not 100% accurate:** Some mail servers accept all addresses (catch-all) or reject all during RCPT TO checks. Use results as a signal, not absolute truth.
+- [Batch verify API guide](./docs/batch-verify-api.md)
+- [Deploy notes](./deploy/README.md)
 
 ## License
 

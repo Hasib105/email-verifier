@@ -150,12 +150,28 @@ export function Playground() {
                     <dd className="mt-1 text-sm text-gray-900">{result.source}</dd>
                   </div>
                   <div className="sm:col-span-1">
+                    <dt className="text-sm font-medium text-gray-500 uppercase tracking-wider">Confidence</dt>
+                    <dd className="mt-1 text-sm text-gray-900 capitalize">{result.confidence}</dd>
+                  </div>
+                  <div className="sm:col-span-1">
                     <dt className="text-sm font-medium text-gray-500 uppercase tracking-wider">Cached</dt>
                     <dd className="mt-1 text-sm text-gray-900">{result.cached ? 'Yes' : 'No'}</dd>
                   </div>
                   <div className="sm:col-span-1">
                     <dt className="text-sm font-medium text-gray-500 uppercase tracking-wider">Finalized</dt>
                     <dd className="mt-1 text-sm text-gray-900">{result.finalized ? 'Yes' : 'No'}</dd>
+                  </div>
+                  <div className="sm:col-span-1">
+                    <dt className="text-sm font-medium text-gray-500 uppercase tracking-wider">Deterministic</dt>
+                    <dd className="mt-1 text-sm text-gray-900">{result.deterministic ? 'Yes' : 'No'}</dd>
+                  </div>
+                  <div className="sm:col-span-1">
+                    <dt className="text-sm font-medium text-gray-500 uppercase tracking-wider">Verification Path</dt>
+                    <dd className="mt-1 text-sm text-gray-900">{result.verification_path.replace(/_/g, ' ')}</dd>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <dt className="text-sm font-medium text-gray-500 uppercase tracking-wider">Signal Summary</dt>
+                    <dd className="mt-1 text-sm text-gray-900">{result.signal_summary}</dd>
                   </div>
                 </dl>
               </div>

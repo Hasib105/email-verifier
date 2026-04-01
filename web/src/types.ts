@@ -40,6 +40,12 @@ export interface VerifyResponse {
   source: string
   cached: boolean
   finalized: boolean
+  confidence: 'high' | 'medium' | 'low'
+  deterministic: boolean
+  reason_code: string
+  verification_path: 'direct_smtp' | 'probe_bounce' | 'hybrid' | string
+  signal_summary: string
+  expires_at: number
   next_check_at?: number
 }
 
@@ -52,6 +58,12 @@ export interface VerificationRecord {
   source: string
   probe_token: string
   smtp_account_id: string
+  confidence: 'high' | 'medium' | 'low'
+  deterministic: boolean
+  reason_code: string
+  verification_path: 'direct_smtp' | 'probe_bounce' | 'hybrid' | string
+  signal_summary: string
+  expires_at: number
   check_count: number
   finalized: boolean
   first_checked_at: number
@@ -72,10 +84,14 @@ export interface CsvImportResponse {
   items: VerifyResponse[]
 }
 
-export interface TorCheckResponse {
-  is_tor: boolean
-  ip: string
+export interface HealthResponse {
+  status: string
+  mode: string
+  direct_smtp_status: 'available' | 'degraded' | 'unknown' | string
+  last_checked_at: number
   message: string
+  verifier_mail_from: string
+  verifier_ehlo_domain: string
 }
 
 export interface SMTPAccount {

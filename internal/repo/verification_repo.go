@@ -12,7 +12,7 @@ import (
 
 func (r *Repository) GetByEmail(ctx context.Context, email string) (*store.VerificationRecord, error) {
 	var rec store.VerificationRecord
-	query := `SELECT id, email, user_id, status, message, source, probe_token, smtp_account_id, check_count, finalized,
+	query := `SELECT id, email, user_id, status, message, source, probe_token, smtp_account_id, confidence, deterministic, reason_code, verification_path, signal_summary, expires_at, check_count, finalized,
 	first_checked_at, last_checked_at, next_check_at, created_at, updated_at
 	FROM verifications WHERE email = $1`
 
@@ -27,7 +27,7 @@ func (r *Repository) GetByEmail(ctx context.Context, email string) (*store.Verif
 
 func (r *Repository) GetByEmailAndUser(ctx context.Context, email, userID string) (*store.VerificationRecord, error) {
 	var rec store.VerificationRecord
-	query := `SELECT id, email, user_id, status, message, source, probe_token, smtp_account_id, check_count, finalized,
+	query := `SELECT id, email, user_id, status, message, source, probe_token, smtp_account_id, confidence, deterministic, reason_code, verification_path, signal_summary, expires_at, check_count, finalized,
 	first_checked_at, last_checked_at, next_check_at, created_at, updated_at
 	FROM verifications WHERE email = $1 AND user_id = $2`
 
@@ -43,10 +43,10 @@ func (r *Repository) GetByEmailAndUser(ctx context.Context, email, userID string
 func (r *Repository) UpsertVerification(ctx context.Context, rec *store.VerificationRecord) error {
 	query := `
 INSERT INTO verifications (
-	id, email, user_id, status, message, source, probe_token, smtp_account_id, check_count, finalized,
+	id, email, user_id, status, message, source, probe_token, smtp_account_id, confidence, deterministic, reason_code, verification_path, signal_summary, expires_at, check_count, finalized,
 	first_checked_at, last_checked_at, next_check_at, created_at, updated_at
 ) VALUES (
-	:id, :email, :user_id, :status, :message, :source, :probe_token, :smtp_account_id, :check_count, :finalized,
+	:id, :email, :user_id, :status, :message, :source, :probe_token, :smtp_account_id, :confidence, :deterministic, :reason_code, :verification_path, :signal_summary, :expires_at, :check_count, :finalized,
 	:first_checked_at, :last_checked_at, :next_check_at, :created_at, :updated_at
 )
 ON CONFLICT(email, user_id) DO UPDATE SET
@@ -55,6 +55,12 @@ ON CONFLICT(email, user_id) DO UPDATE SET
 	source = excluded.source,
 	probe_token = excluded.probe_token,
 	smtp_account_id = excluded.smtp_account_id,
+	confidence = excluded.confidence,
+	deterministic = excluded.deterministic,
+	reason_code = excluded.reason_code,
+	verification_path = excluded.verification_path,
+	signal_summary = excluded.signal_summary,
+	expires_at = excluded.expires_at,
 	check_count = excluded.check_count,
 	finalized = excluded.finalized,
 	last_checked_at = excluded.last_checked_at,
@@ -81,7 +87,7 @@ func (r *Repository) ListDueChecks(ctx context.Context, nowUnix int64, limit int
 		limit = 50
 	}
 	records := []store.VerificationRecord{}
-	query := `SELECT id, email, user_id, status, message, source, probe_token, smtp_account_id, check_count, finalized,
+	query := `SELECT id, email, user_id, status, message, source, probe_token, smtp_account_id, confidence, deterministic, reason_code, verification_path, signal_summary, expires_at, check_count, finalized,
 	first_checked_at, last_checked_at, next_check_at, created_at, updated_at
 	FROM verifications
 	WHERE finalized = FALSE AND next_check_at > 0 AND next_check_at <= $1
@@ -99,7 +105,7 @@ func (r *Repository) ListVerificationsByUser(ctx context.Context, userID string,
 		limit = 50
 	}
 	records := []store.VerificationRecord{}
-	query := `SELECT id, email, user_id, status, message, source, probe_token, smtp_account_id, check_count, finalized,
+	query := `SELECT id, email, user_id, status, message, source, probe_token, smtp_account_id, confidence, deterministic, reason_code, verification_path, signal_summary, expires_at, check_count, finalized,
 	first_checked_at, last_checked_at, next_check_at, created_at, updated_at
 	FROM verifications
 	WHERE user_id = $1
@@ -144,7 +150,7 @@ func (r *Repository) GetVerificationStats(ctx context.Context, userID string) (m
 
 func (r *Repository) GetVerificationByID(ctx context.Context, id string) (*store.VerificationRecord, error) {
 	var rec store.VerificationRecord
-	query := `SELECT id, email, user_id, status, message, source, probe_token, smtp_account_id, check_count, finalized,
+	query := `SELECT id, email, user_id, status, message, source, probe_token, smtp_account_id, confidence, deterministic, reason_code, verification_path, signal_summary, expires_at, check_count, finalized,
 	first_checked_at, last_checked_at, next_check_at, created_at, updated_at
 	FROM verifications WHERE id = $1`
 
@@ -162,7 +168,7 @@ func (r *Repository) ListAllVerifications(ctx context.Context, limit, offset int
 		limit = 50
 	}
 	records := []store.VerificationRecord{}
-	query := `SELECT id, email, user_id, status, message, source, probe_token, smtp_account_id, check_count, finalized,
+	query := `SELECT id, email, user_id, status, message, source, probe_token, smtp_account_id, confidence, deterministic, reason_code, verification_path, signal_summary, expires_at, check_count, finalized,
 	first_checked_at, last_checked_at, next_check_at, created_at, updated_at
 	FROM verifications
 	ORDER BY created_at DESC

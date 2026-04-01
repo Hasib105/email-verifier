@@ -44,16 +44,22 @@ func (d *HTTPWebhookDispatcher) SendWithURL(ctx context.Context, event string, r
 	}
 
 	payload := map[string]interface{}{
-		"event":       event,
-		"id":          rec.ID,
-		"email":       rec.Email,
-		"status":      rec.Status,
-		"message":     rec.Message,
-		"source":      rec.Source,
-		"user_id":     rec.UserID,
-		"check_count": rec.CheckCount,
-		"finalized":   rec.Finalized,
-		"checked_at":  rec.LastCheckedAt,
+		"event":             event,
+		"id":                rec.ID,
+		"email":             rec.Email,
+		"status":            rec.Status,
+		"message":           rec.Message,
+		"source":            rec.Source,
+		"user_id":           rec.UserID,
+		"check_count":       rec.CheckCount,
+		"finalized":         rec.Finalized,
+		"checked_at":        rec.LastCheckedAt,
+		"confidence":        rec.Confidence,
+		"deterministic":     rec.Deterministic,
+		"reason_code":       rec.ReasonCode,
+		"verification_path": rec.VerificationPath,
+		"signal_summary":    rec.SignalSummary,
+		"expires_at":        rec.ExpiresAt,
 	}
 
 	body, err := json.Marshal(payload)

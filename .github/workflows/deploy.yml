@@ -57,16 +57,6 @@ jobs:
             ${{ steps.image_prefix.outputs.value }}-web:latest
             ${{ steps.image_prefix.outputs.value }}-web:${{ github.sha }}
 
-      - name: Build and push Tor image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./tor.Dockerfile
-          push: true
-          tags: |
-            ${{ steps.image_prefix.outputs.value }}-tor:latest
-            ${{ steps.image_prefix.outputs.value }}-tor:${{ github.sha }}
-
   deploy:
     runs-on: ubuntu-latest
     needs: build-images

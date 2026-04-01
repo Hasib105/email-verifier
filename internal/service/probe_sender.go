@@ -10,19 +10,15 @@ import (
 	"net/smtp"
 	"strings"
 	"sync/atomic"
-	"time"
-
-	"golang.org/x/net/proxy"
 )
 
 type SMTPProbeSender struct {
 	repo            *repo.Repository
-	torSocksAddr    string
 	rotationCounter uint64 // atomic counter for template rotation
 }
 
-func NewSMTPProbeSender(r *repo.Repository, torSocksAddr string) *SMTPProbeSender {
-	return &SMTPProbeSender{repo: r, torSocksAddr: torSocksAddr}
+func NewSMTPProbeSender(r *repo.Repository) *SMTPProbeSender {
+	return &SMTPProbeSender{repo: r}
 }
 
 func (s *SMTPProbeSender) SendProbe(ctx context.Context, targetEmail, token string) (string, error) {
@@ -89,57 +85,16 @@ func (s *SMTPProbeSender) SendProbeForUser(ctx context.Context, targetEmail, tok
 		body,
 	}, "\r\n")
 
-	if err := s.sendViaTor(addr, host, account.Port, auth, account.Sender, targetEmail, []byte(message)); err != nil {
+	if err := s.sendDirect(addr, host, account.Port, auth, account.Sender, targetEmail, []byte(message)); err != nil {
 		return "", fmt.Errorf("send smtp probe using account %s: %w", account.Username, err)
 	}
 
 	return account.ID, nil
 }
 
-func (s *SMTPProbeSender) sendViaTor(addr, host string, port int, auth smtp.Auth, from, to string, rawMessage []byte) error {
-	var conn net.Conn
-	var err error
-	torFailed := false
-	originalTorErr := error(nil)
-
-	if s.torSocksAddr != "" {
-		const maxTorDialAttempts = 3
-		for attempt := 1; attempt <= maxTorDialAttempts; attempt++ {
-			dialer, derr := proxy.SOCKS5("tcp", s.torSocksAddr, nil, proxy.Direct)
-			if derr != nil {
-				return fmt.Errorf("create socks5 dialer: %w", derr)
-			}
-
-			conn, err = dialer.Dial("tcp", addr)
-			if err == nil {
-				break
-			}
-			torFailed = true
-			originalTorErr = err
-
-			if !strings.Contains(strings.ToLower(err.Error()), "general socks server failure") || attempt == maxTorDialAttempts {
-				break
-			}
-
-			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
-		}
-	}
-
-	if conn == nil && s.torSocksAddr != "" {
-		// Fall back to direct SMTP dial when Tor exits cannot reach provider SMTP ports.
-		conn, err = net.Dial("tcp", addr)
-	}
-
-	if conn == nil && s.torSocksAddr == "" {
-		conn, err = net.Dial("tcp", addr)
-	}
+func (s *SMTPProbeSender) sendDirect(addr, host string, port int, auth smtp.Auth, from, to string, rawMessage []byte) error {
+	conn, err := net.Dial("tcp", addr)
 	if err != nil {
-		if torFailed {
-			return fmt.Errorf("dial smtp server failed via tor and direct fallback (tor error: %v, direct error: %w)", originalTorErr, err)
-		}
-		if s.torSocksAddr != "" && strings.Contains(strings.ToLower(err.Error()), "general socks server failure") {
-			return fmt.Errorf("dial smtp server through tor: %w (possible causes: invalid smtp host or smtp egress blocked by Tor exit policy)", err)
-		}
 		return fmt.Errorf("dial smtp server: %w", err)
 	}
 	defer conn.Close()

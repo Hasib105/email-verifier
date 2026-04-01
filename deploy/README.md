@@ -25,7 +25,6 @@ When pushing to `main`, `.github/workflows/deploy.yml` will:
 1. Build and push images in GitHub Actions runner:
    - `ghcr.io/<owner>/<repo>-api:latest`
    - `ghcr.io/<owner>/<repo>-web:latest`
-   - `ghcr.io/<owner>/<repo>-tor:latest`
 2. SSH into your server.
 3. Pull images and restart services using:
    - `docker compose --env-file .env -f deploy/docker-compose.prod.yml pull`

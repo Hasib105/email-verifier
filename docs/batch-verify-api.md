@@ -1,15 +1,15 @@
 # Batch Verify API Integration Guide
 
-This guide shows how other backend services can call the batch endpoint safely.
+This guide shows how backend services can call `/verify/batch` safely with the hardened V1 response model.
 
 ## Endpoint
 
 - Method: `POST`
 - URL: `/verify/batch`
-- Auth header: `X-API-Key: <user-api-key>`
+- Header: `X-API-Key: <user-api-key>`
 - Content type: `application/json`
 
-## Request Body
+## Request
 
 ```json
 {
@@ -23,11 +23,11 @@ This guide shows how other backend services can call the batch endpoint safely.
 
 Rules:
 
-- Minimum 1 email.
-- Maximum 1000 emails per request.
-- Emails are processed independently.
+- Minimum `1` email
+- Maximum `1000` emails
+- Each email is processed independently
 
-## Response Body
+## Response
 
 ```json
 {
@@ -38,10 +38,16 @@ Rules:
       "id": "2f06116d-4f3e-4f76-b671-71888fadb5f4",
       "email": "alice@example.com",
       "status": "valid",
-      "message": "250 Accepted",
+      "message": "250 recipient accepted",
       "source": "direct-smtp-check",
       "cached": false,
-      "finalized": true
+      "finalized": true,
+      "confidence": "medium",
+      "deterministic": false,
+      "reason_code": "direct_accept_non_strict",
+      "verification_path": "direct_smtp",
+      "signal_summary": "Recipient MX accepted RCPT on a non-strict provider.",
+      "expires_at": 1775259200
     },
     {
       "id": "f1d4f67e-54d4-437e-a5d1-3f89c53f6ff9",
@@ -50,7 +56,13 @@ Rules:
       "message": "invalid syntax",
       "source": "direct-smtp-check",
       "cached": false,
-      "finalized": true
+      "finalized": true,
+      "confidence": "high",
+      "deterministic": true,
+      "reason_code": "syntax_invalid",
+      "verification_path": "direct_smtp",
+      "signal_summary": "Address failed syntax validation before any network checks.",
+      "expires_at": 1775604800
     }
   ]
 }
@@ -58,15 +70,16 @@ Rules:
 
 Notes:
 
-- `accepted` is the number of items processed by the API, not the number of `valid` emails.
-- Use `items[*].status` for final business decisions.
+- `accepted` means the API processed the item, not that the mailbox is `valid`.
+- Use `status` together with `confidence`, `deterministic`, and `signal_summary`.
+- `pending_bounce_check` means the probe workflow is still active.
 
 ## Error Responses
 
-- `401 Unauthorized`: missing or invalid API key.
-- `400 Bad Request`: invalid JSON, empty list, or batch size over 1000.
+- `401 Unauthorized`: missing or invalid API key
+- `400 Bad Request`: invalid JSON, empty list, or batch size over 1000
 
-Example 400:
+Example:
 
 ```json
 {
@@ -74,201 +87,158 @@ Example 400:
 }
 ```
 
-## Service-to-Service Implementation Pattern
+## Recommended Service Pattern
 
-1. Split your source list into chunks of at most 1000.
-2. Send each chunk to `/verify/batch`.
-3. Retry transient failures (`5xx`, timeout, connection reset) with exponential backoff.
-4. Do not retry `4xx` except token refresh/auth correction.
-5. Persist results using `id` and `email` from each item.
+1. Split source emails into chunks of at most `1000`.
+2. Submit each chunk to `/verify/batch`.
+3. Persist `id`, `email`, `status`, `confidence`, `reason_code`, and `expires_at`.
+4. Use finalized results immediately.
+5. Poll only items that remain `pending_bounce_check`.
+6. Re-query expired items instead of assuming the old result still holds.
 
-## Go Integration Only
-
-This section contains only Go examples for:
-
-- sending batch verification requests,
-- pulling verification results,
-- setting webhook URL,
-- testing webhook delivery.
+## Go Example
 
 ```go
 package main
 
 import (
-  "bytes"
-  "encoding/json"
-  "fmt"
-  "io"
-  "net/http"
-  "net/url"
-  "time"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"time"
 )
 
 type Client struct {
-  BaseURL string
-  APIKey  string
-  HTTP    *http.Client
+	BaseURL string
+	APIKey  string
+	HTTP    *http.Client
 }
 
 type BatchRequest struct {
-  Emails []string `json:"emails"`
+	Emails []string `json:"emails"`
 }
 
 type VerifyItem struct {
-  ID          string `json:"id"`
-  Email       string `json:"email"`
-  Status      string `json:"status"`
-  Message     string `json:"message"`
-  Source      string `json:"source"`
-  Cached      bool   `json:"cached"`
-  Finalized   bool   `json:"finalized"`
-  NextCheckAt int64  `json:"next_check_at,omitempty"`
+	ID               string `json:"id"`
+	Email            string `json:"email"`
+	Status           string `json:"status"`
+	Message          string `json:"message"`
+	Source           string `json:"source"`
+	Cached           bool   `json:"cached"`
+	Finalized        bool   `json:"finalized"`
+	NextCheckAt      int64  `json:"next_check_at,omitempty"`
+	Confidence       string `json:"confidence"`
+	Deterministic    bool   `json:"deterministic"`
+	ReasonCode       string `json:"reason_code"`
+	VerificationPath string `json:"verification_path"`
+	SignalSummary    string `json:"signal_summary"`
+	ExpiresAt        int64  `json:"expires_at"`
 }
 
 type BatchResponse struct {
-  Total    int          `json:"total"`
-  Accepted int          `json:"accepted"`
-  Items    []VerifyItem `json:"items"`
+	Total    int          `json:"total"`
+	Accepted int          `json:"accepted"`
+	Items    []VerifyItem `json:"items"`
 }
 
 type ListVerificationsResponse struct {
-  Items []VerifyItem `json:"items"`
+	Items []VerifyItem `json:"items"`
 }
 
 func NewClient(baseURL, apiKey string) *Client {
-  return &Client{
-    BaseURL: baseURL,
-    APIKey:  apiKey,
-    HTTP:    &http.Client{Timeout: 60 * time.Second},
-  }
+	return &Client{
+		BaseURL: baseURL,
+		APIKey:  apiKey,
+		HTTP:    &http.Client{Timeout: 60 * time.Second},
+	}
 }
 
 func (c *Client) doJSON(method, path string, reqBody any, out any) error {
-  var body io.Reader
-  if reqBody != nil {
-    payload, err := json.Marshal(reqBody)
-    if err != nil {
-      return err
-    }
-    body = bytes.NewReader(payload)
-  }
+	var body io.Reader
+	if reqBody != nil {
+		payload, err := json.Marshal(reqBody)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(payload)
+	}
 
-  req, err := http.NewRequest(method, c.BaseURL+path, body)
-  if err != nil {
-    return err
-  }
-  req.Header.Set("X-API-Key", c.APIKey)
-  if reqBody != nil {
-    req.Header.Set("Content-Type", "application/json")
-  }
+	req, err := http.NewRequest(method, c.BaseURL+path, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-API-Key", c.APIKey)
+	if reqBody != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
-  resp, err := c.HTTP.Do(req)
-  if err != nil {
-    return err
-  }
-  defer resp.Body.Close()
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
 
-  if resp.StatusCode >= 300 {
-    raw, _ := io.ReadAll(resp.Body)
-    return fmt.Errorf("%s %s failed: status=%d body=%s", method, path, resp.StatusCode, string(raw))
-  }
+	if resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("%s %s failed: status=%d body=%s", method, path, resp.StatusCode, string(raw))
+	}
 
-  if out != nil {
-    if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-      return err
-    }
-  }
+	if out != nil {
+		return json.NewDecoder(resp.Body).Decode(out)
+	}
 
-  return nil
+	return nil
 }
 
-// 1) Submit batch request
 func (c *Client) VerifyBatch(emails []string) (*BatchResponse, error) {
-  var out BatchResponse
-  err := c.doJSON(http.MethodPost, "/verify/batch", BatchRequest{Emails: emails}, &out)
-  if err != nil {
-    return nil, err
-  }
-  return &out, nil
+	var out BatchResponse
+	if err := c.doJSON(http.MethodPost, "/verify/batch", BatchRequest{Emails: emails}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// 2) Pull one verification result by ID
 func (c *Client) GetVerificationByID(id string) (*VerifyItem, error) {
-  var out VerifyItem
-  err := c.doJSON(http.MethodGet, "/verifications/"+id, nil, &out)
-  if err != nil {
-    return nil, err
-  }
-  return &out, nil
+	var out VerifyItem
+	if err := c.doJSON(http.MethodGet, "/verifications/"+id, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// 3) Pull paginated verification results
 func (c *Client) ListVerifications(limit, offset int) (*ListVerificationsResponse, error) {
-  q := url.Values{}
-  q.Set("limit", fmt.Sprintf("%d", limit))
-  q.Set("offset", fmt.Sprintf("%d", offset))
+	q := url.Values{}
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	q.Set("offset", fmt.Sprintf("%d", offset))
 
-  var out ListVerificationsResponse
-  err := c.doJSON(http.MethodGet, "/verifications?"+q.Encode(), nil, &out)
-  if err != nil {
-    return nil, err
-  }
-  return &out, nil
+	var out ListVerificationsResponse
+	if err := c.doJSON(http.MethodGet, "/verifications?"+q.Encode(), nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// 4) Optional polling helper for pending_bounce_check items
 func (c *Client) WaitUntilFinalized(id string, interval time.Duration, maxAttempts int) (*VerifyItem, error) {
-  for i := 0; i < maxAttempts; i++ {
-    item, err := c.GetVerificationByID(id)
-    if err != nil {
-      return nil, err
-    }
-    if item.Finalized {
-      return item, nil
-    }
-    time.Sleep(interval)
-  }
-  return nil, fmt.Errorf("verification %s not finalized after %d attempts", id, maxAttempts)
-}
-
-// 5) Set webhook URL for this API key owner
-func (c *Client) UpdateWebhook(webhookURL string) error {
-  return c.doJSON(http.MethodPut, "/users/webhook", map[string]string{
-    "webhook_url": webhookURL,
-  }, nil)
-}
-
-// 6) Test webhook delivery immediately
-func (c *Client) TestWebhook(webhookURL string) error {
-  return c.doJSON(http.MethodPost, "/users/webhook/test", map[string]string{
-    "webhook_url": webhookURL,
-  }, nil)
+	for i := 0; i < maxAttempts; i++ {
+		item, err := c.GetVerificationByID(id)
+		if err != nil {
+			return nil, err
+		}
+		if item.Finalized {
+			return item, nil
+		}
+		time.Sleep(interval)
+	}
+	return nil, fmt.Errorf("verification %s not finalized after %d attempts", id, maxAttempts)
 }
 ```
 
-## How To Pull Results
+## Pulling Results
 
-1. Call `/verify/batch` and store each `items[i].id`.
-2. If `items[i].finalized` is `true`, use the result immediately.
-3. If `items[i].status` is `pending_bounce_check`, poll `/verifications/{id}` until `finalized=true`.
-4. For dashboard/report pages, use `/verifications?limit=50&offset=0`.
-
-## How To Set Webhook
-
-1. Call `PUT /users/webhook` with:
-
-```json
-{
-  "webhook_url": "https://your-service.example.com/email-events"
-}
-```
-
-2. Call `POST /users/webhook/test` with the same payload to verify receiver availability.
-
-## Recommended Flow In Go Service
-
-1. Initialize client with user API key.
-2. Set webhook once using `UpdateWebhook`.
-3. Submit batches using `VerifyBatch`.
-4. Process immediate finalized items.
-5. Poll only pending items with `WaitUntilFinalized`.
+1. Call `/verify/batch` and store `items[i].id`.
+2. Use items with `finalized=true` immediately.
+3. Poll `/verifications/{id}` for items with `status=pending_bounce_check`.
+4. Re-verify items after `expires_at`.

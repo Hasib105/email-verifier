@@ -4,7 +4,6 @@ import (
 	"context"
 	"email-verifier-api/internal/service"
 	"email-verifier-api/internal/store"
-	"email-verifier-api/internal/verifier"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -691,19 +690,6 @@ func AdminListEmailTemplatesHandler(svc *service.EmailVerificationService) fiber
 		}
 
 		return c.JSON(fiber.Map{"items": templates})
-	}
-}
-
-// @Summary Check Tor connectivity
-// @Description Checks if the API is properly routing traffic through Tor
-// @Tags health
-// @Produce json
-// @Success 200 {object} verifier.TorCheckResult
-// @Router /check-tor [get]
-func CheckTorHandler(v *verifier.EmailVerifier) fiber.Handler {
-	return func(c *fiber.Ctx) error {
-		result := v.CheckTor()
-		return c.JSON(result)
 	}
 }
 

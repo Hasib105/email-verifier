@@ -25,14 +25,20 @@ type UserInput struct {
 }
 
 type VerificationRecord struct {
-	ID            string `db:"id" json:"id"`
-	Email         string `db:"email" json:"email"`
-	Status        string `db:"status" json:"status"`
-	Message       string `db:"message" json:"message"`
-	Source        string `db:"source" json:"source"`
-	ProbeToken    string `db:"probe_token" json:"probe_token"`
-	SMTPAccountID string `db:"smtp_account_id" json:"smtp_account_id"`
-	UserID        string `db:"user_id" json:"user_id"`
+	ID               string `db:"id" json:"id"`
+	Email            string `db:"email" json:"email"`
+	Status           string `db:"status" json:"status"`
+	Message          string `db:"message" json:"message"`
+	Source           string `db:"source" json:"source"`
+	ProbeToken       string `db:"probe_token" json:"probe_token"`
+	SMTPAccountID    string `db:"smtp_account_id" json:"smtp_account_id"`
+	UserID           string `db:"user_id" json:"user_id"`
+	Confidence       string `db:"confidence" json:"confidence"`
+	Deterministic    bool   `db:"deterministic" json:"deterministic"`
+	ReasonCode       string `db:"reason_code" json:"reason_code"`
+	VerificationPath string `db:"verification_path" json:"verification_path"`
+	SignalSummary    string `db:"signal_summary" json:"signal_summary"`
+	ExpiresAt        int64  `db:"expires_at" json:"expires_at"`
 
 	CheckCount int  `db:"check_count" json:"check_count"`
 	Finalized  bool `db:"finalized" json:"finalized"`

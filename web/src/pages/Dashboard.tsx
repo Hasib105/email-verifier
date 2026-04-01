@@ -2,24 +2,24 @@ import { useState, useEffect } from 'react';
 import { Activity, Mail, CheckCircle, AlertTriangle, XCircle, Clock } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
-import type { VerificationStats } from '../types';
+import type { HealthResponse, VerificationStats } from '../types';
 
 export function Dashboard() {
   const { config } = useAuth();
   const [stats, setStats] = useState<VerificationStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [torStatus, setTorStatus] = useState<'checking' | 'online' | 'offline'>('checking');
+  const [health, setHealth] = useState<HealthResponse | null>(null);
 
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [statsData, torData] = await Promise.all([
+        const [statsData, healthData] = await Promise.all([
           api.getVerificationStats(config),
-          api.getTorStatus(config).catch(() => ({ is_tor: false })),
+          api.getHealth(config).catch(() => null),
         ]);
         setStats(statsData);
-        setTorStatus(torData.is_tor ? 'online' : 'offline');
+        setHealth(healthData);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load data');
       } finally {
@@ -42,6 +42,7 @@ export function Dashboard() {
   const invalidCount = (stats?.by_status?.invalid || 0) + (stats?.by_status?.bounced || 0);
   const pendingCount = (stats?.by_status?.pending_bounce_check || 0) + (stats?.by_status?.greylisted || 0);
   const totalCount = stats?.total || 0;
+  const directSmtpStatus = health?.direct_smtp_status || 'unknown';
 
   return (
     <div className="space-y-8">
@@ -106,16 +107,21 @@ export function Dashboard() {
             <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
               <div className="flex items-center gap-3">
                 <AlertTriangle className="text-purple-500 w-5 h-5"/>
-                <span className="text-sm font-medium">Tor Proxy</span>
+                <span className="text-sm font-medium">Direct SMTP Path</span>
               </div>
               <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
-                torStatus === 'online' ? 'bg-green-100 text-green-800' :
-                torStatus === 'offline' ? 'bg-red-100 text-red-800' :
+                directSmtpStatus === 'available' ? 'bg-green-100 text-green-800' :
+                directSmtpStatus === 'degraded' ? 'bg-red-100 text-red-800' :
                 'bg-yellow-100 text-yellow-800'
               }`}>
-                {torStatus === 'checking' ? 'Checking...' : torStatus === 'online' ? 'Connected' : 'Disconnected'}
+                {directSmtpStatus === 'available' ? 'Available' : directSmtpStatus === 'degraded' ? 'Degraded' : 'Unknown'}
               </span>
             </div>
+            {health?.message && (
+              <p className="text-xs text-gray-500 px-1">
+                {health.message}
+              </p>
+            )}
           </div>
         </div>
 

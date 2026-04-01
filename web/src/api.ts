@@ -2,13 +2,13 @@ import type {
   CsvImportResponse,
   EmailTemplate,
   EmailTemplateCreateRequest,
+  HealthResponse,
   LoginRequest,
   LoginResponse,
   RegisterRequest,
   RegisterResponse,
   SMTPAccount,
   SMTPAccountCreateRequest,
-  TorCheckResponse,
   User,
   VerificationRecord,
   VerificationStats,
@@ -97,17 +97,8 @@ async function requestNoAuth<T>(
 
 export const api = {
   // Health
-  getHealth: async (baseUrl: string) => {
-    const url = `${normalizeBaseUrl(baseUrl || DEFAULT_BASE_URL)}/health`
-    const response = await fetch(url)
-    if (!response.ok) {
-      throw new ApiError(`Health check failed with status ${response.status}`, response.status)
-    }
-    return response.text()
-  },
-
-  getTorStatus: (config: ApiConfig) =>
-    request<TorCheckResponse>(config, '/check-tor', { method: 'GET' }),
+  getHealth: (config: ApiConfig) =>
+    request<HealthResponse>(config, '/health', { method: 'GET' }),
 
   // Auth
   login: (baseUrl: string, req: LoginRequest) =>

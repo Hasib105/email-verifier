@@ -218,8 +218,13 @@ export function Settings() {
   "event": "verification_complete",
   "email": "user@example.com",
   "status": "bounced",
+  "confidence": "high",
+  "deterministic": true,
+  "reason_code": "bounce_token_match",
+  "verification_path": "hybrid",
+  "signal_summary": "Bounce evidence matched the unique probe token.",
+  "expires_at": 1736937000,
   "verified_at": "2024-01-15T10:30:00Z",
-  "mx_record": "gmail-smtp-in.l.google.com",
   "details": "Bounce detected after probe verification"
 }`}
         </pre>

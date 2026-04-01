@@ -184,6 +184,9 @@ export function AdminPanel() {
                       }`}>
                         {v.status}
                       </span>
+                      <div className="text-xs text-gray-500 mt-1 capitalize">
+                        {v.confidence || 'low'} confidence
+                      </div>
                     </td>
                     <td className="hidden sm:table-cell px-4 py-3 text-sm text-gray-500">{v.source || '-'}</td>
                     <td className="hidden md:table-cell px-4 py-3 text-sm text-gray-500">

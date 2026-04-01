@@ -8,20 +8,19 @@ import (
 )
 
 type Config struct {
-	Port           string
-	APIKey         string
-	Host           string
-	TorSocksAddr   string
-	TorControlAddr string
-	MaxConcurrency int
-	Timeout        time.Duration
-	DatabaseDSN    string
-	DBHost         string
-	DBPort         int
-	DBUser         string
-	DBPassword     string
-	DBName         string
-	DBSSLMode      string
+	Port               string
+	APIKey             string
+	VerifierMailFrom   string
+	VerifierEHLODomain string
+	MaxConcurrency     int
+	Timeout            time.Duration
+	DatabaseDSN        string
+	DBHost             string
+	DBPort             int
+	DBUser             string
+	DBPassword         string
+	DBName             string
+	DBSSLMode          string
 
 	WebhookURL     string
 	WebhookTimeout time.Duration
@@ -29,22 +28,26 @@ type Config struct {
 	CheckInterval     time.Duration
 	FirstBounceDelay  time.Duration
 	SecondBounceDelay time.Duration
+	HardResultTTL     time.Duration
+	DirectValidTTL    time.Duration
+	ProbeValidTTL     time.Duration
+	TransientTTL      time.Duration
 }
 
 func Load() *Config {
 	return &Config{
-		Port:           getEnv("PORT", "3000"),
-		APIKey:         getEnv("API_KEY", "secret-key-change-me"),
-		TorSocksAddr:   getEnv("TOR_SOCKS_ADDR", "tor:9050"), // 'tor' is docker service name
-		TorControlAddr: getEnv("TOR_CONTROL_ADDR", ""),       // e.g., "tor:9051"
-		MaxConcurrency: getEnvInt("MAX_CONCURRENCY", 5),      // Tor is slow, keep this low
-		Timeout:        getEnvDuration("TIMEOUT", 45*time.Second),
-		DBHost:         getEnv("DB_HOST", "postgres"),
-		DBPort:         getEnvInt("DB_PORT", 5432),
-		DBUser:         getEnv("DB_USER", "postgres"),
-		DBPassword:     getEnv("DB_PASSWORD", "postgres"),
-		DBName:         getEnv("DB_NAME", "verifier"),
-		DBSSLMode:      getEnv("DB_SSLMODE", "disable"),
+		Port:               getEnv("PORT", "3000"),
+		APIKey:             getEnv("API_KEY", "secret-key-change-me"),
+		VerifierMailFrom:   getEnv("VERIFIER_MAIL_FROM", "verify@localhost"),
+		VerifierEHLODomain: getEnv("VERIFIER_EHLO_DOMAIN", "localhost"),
+		MaxConcurrency:     getEnvInt("MAX_CONCURRENCY", 10),
+		Timeout:            getEnvDuration("TIMEOUT", 20*time.Second),
+		DBHost:             getEnv("DB_HOST", "postgres"),
+		DBPort:             getEnvInt("DB_PORT", 5432),
+		DBUser:             getEnv("DB_USER", "postgres"),
+		DBPassword:         getEnv("DB_PASSWORD", "postgres"),
+		DBName:             getEnv("DB_NAME", "verifier"),
+		DBSSLMode:          getEnv("DB_SSLMODE", "disable"),
 
 		WebhookURL:     getEnv("WEBHOOK_URL", ""),
 		WebhookTimeout: getEnvDuration("WEBHOOK_TIMEOUT", 10*time.Second),
@@ -52,6 +55,10 @@ func Load() *Config {
 		CheckInterval:     getEnvDuration("CHECK_INTERVAL", 1*time.Minute),
 		FirstBounceDelay:  getEnvDuration("FIRST_BOUNCE_DELAY", 1*time.Minute),
 		SecondBounceDelay: getEnvDuration("SECOND_BOUNCE_DELAY", 6*time.Hour),
+		HardResultTTL:     getEnvDuration("HARD_RESULT_TTL", 7*24*time.Hour),
+		DirectValidTTL:    getEnvDuration("DIRECT_VALID_TTL", 72*time.Hour),
+		ProbeValidTTL:     getEnvDuration("PROBE_VALID_TTL", 24*time.Hour),
+		TransientTTL:      getEnvDuration("TRANSIENT_RESULT_TTL", 6*time.Hour),
 	}
 }
 
