@@ -8,6 +8,23 @@ import (
 )
 
 var hostnamePattern = regexp.MustCompile(`(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$`)
+var commonAtHostPattern = regexp.MustCompile(`(?i)^(smtp|imap)@([a-z0-9.-]+)$`)
+
+func normalizeServerHost(host string) string {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if matches := commonAtHostPattern.FindStringSubmatch(host); len(matches) == 3 {
+		return matches[1] + "." + matches[2]
+	}
+	return host
+}
+
+func inferIMAPHost(smtpHost string) string {
+	smtpHost = normalizeServerHost(smtpHost)
+	if strings.HasPrefix(smtpHost, "smtp.") {
+		return "imap." + strings.TrimPrefix(smtpHost, "smtp.")
+	}
+	return smtpHost
+}
 
 func validateServerHost(fieldName, host string) error {
 	host = strings.TrimSpace(host)

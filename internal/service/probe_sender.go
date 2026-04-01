@@ -45,8 +45,8 @@ func (s *SMTPProbeSender) SendProbeForUser(ctx context.Context, targetEmail, tok
 		return "", fmt.Errorf("no active smtp account available or all accounts reached daily limit")
 	}
 
-	addr := fmt.Sprintf("%s:%d", account.Host, account.Port)
-	host := account.Host
+	host := normalizeServerHost(account.Host)
+	addr := fmt.Sprintf("%s:%d", host, account.Port)
 	if err := validateServerHost("host", host); err != nil {
 		return "", fmt.Errorf("invalid smtp account configuration: %w", err)
 	}
@@ -99,6 +99,8 @@ func (s *SMTPProbeSender) SendProbeForUser(ctx context.Context, targetEmail, tok
 func (s *SMTPProbeSender) sendViaTor(addr, host string, port int, auth smtp.Auth, from, to string, rawMessage []byte) error {
 	var conn net.Conn
 	var err error
+	torFailed := false
+	originalTorErr := error(nil)
 
 	if s.torSocksAddr != "" {
 		const maxTorDialAttempts = 3
@@ -112,6 +114,8 @@ func (s *SMTPProbeSender) sendViaTor(addr, host string, port int, auth smtp.Auth
 			if err == nil {
 				break
 			}
+			torFailed = true
+			originalTorErr = err
 
 			if !strings.Contains(strings.ToLower(err.Error()), "general socks server failure") || attempt == maxTorDialAttempts {
 				break
@@ -119,10 +123,20 @@ func (s *SMTPProbeSender) sendViaTor(addr, host string, port int, auth smtp.Auth
 
 			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
 		}
-	} else {
+	}
+
+	if conn == nil && s.torSocksAddr != "" {
+		// Fall back to direct SMTP dial when Tor exits cannot reach provider SMTP ports.
+		conn, err = net.Dial("tcp", addr)
+	}
+
+	if conn == nil && s.torSocksAddr == "" {
 		conn, err = net.Dial("tcp", addr)
 	}
 	if err != nil {
+		if torFailed {
+			return fmt.Errorf("dial smtp server failed via tor and direct fallback (tor error: %v, direct error: %w)", originalTorErr, err)
+		}
 		if s.torSocksAddr != "" && strings.Contains(strings.ToLower(err.Error()), "general socks server failure") {
 			return fmt.Errorf("dial smtp server through tor: %w (possible causes: invalid smtp host or smtp egress blocked by Tor exit policy)", err)
 		}

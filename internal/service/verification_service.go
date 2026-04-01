@@ -160,17 +160,17 @@ func (s *EmailVerificationService) VerifyEmail(ctx context.Context, email string
 }
 
 func (s *EmailVerificationService) CreateSMTPAccount(ctx context.Context, req SMTPAccountCreateRequest, userID string) (*store.SMTPAccount, error) {
-	req.Host = strings.TrimSpace(req.Host)
+	req.Host = normalizeServerHost(req.Host)
 	req.Username = strings.TrimSpace(req.Username)
 	req.Sender = strings.TrimSpace(req.Sender)
-	req.IMAPHost = strings.TrimSpace(req.IMAPHost)
+	req.IMAPHost = normalizeServerHost(req.IMAPHost)
 	req.IMAPMailbox = strings.TrimSpace(req.IMAPMailbox)
 
 	if req.Host == "" || req.Username == "" || req.Password == "" || req.Sender == "" {
 		return nil, errors.New("host, username, password, and sender are required")
 	}
 	if req.IMAPHost == "" {
-		req.IMAPHost = req.Host
+		req.IMAPHost = inferIMAPHost(req.Host)
 	}
 	if req.Port == 0 {
 		req.Port = 587
@@ -295,17 +295,17 @@ func (s *EmailVerificationService) GetSMTPAccount(ctx context.Context, id string
 }
 
 func (s *EmailVerificationService) UpdateSMTPAccount(ctx context.Context, id string, req SMTPAccountCreateRequest, userID string) (*store.SMTPAccount, error) {
-	req.Host = strings.TrimSpace(req.Host)
+	req.Host = normalizeServerHost(req.Host)
 	req.Username = strings.TrimSpace(req.Username)
 	req.Sender = strings.TrimSpace(req.Sender)
-	req.IMAPHost = strings.TrimSpace(req.IMAPHost)
+	req.IMAPHost = normalizeServerHost(req.IMAPHost)
 	req.IMAPMailbox = strings.TrimSpace(req.IMAPMailbox)
 
 	if req.Host == "" || req.Username == "" || req.Sender == "" {
 		return nil, errors.New("host, username, and sender are required")
 	}
 	if req.IMAPHost == "" {
-		req.IMAPHost = req.Host
+		req.IMAPHost = inferIMAPHost(req.Host)
 	}
 	if req.Port == 0 {
 		req.Port = 587
@@ -436,8 +436,13 @@ func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store
 		return fmt.Errorf("smtp account not found: %s", rec.SMTPAccountID)
 	}
 
+	imapHost := normalizeServerHost(account.IMAPHost)
+	if imapHost == "" {
+		imapHost = inferIMAPHost(account.Host)
+	}
+
 	bounced, reason, err := s.bounceChecker.HasBounce(ctx, IMAPConfig{
-		Host:     account.IMAPHost,
+		Host:     imapHost,
 		Port:     account.IMAPPort,
 		Username: account.Username,
 		Password: account.Password,
@@ -457,7 +462,7 @@ func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store
 
 	if err != nil {
 		if checkNumber == 1 {
-			rec.Status = "pending_bounce_check"
+			rec.Status = "error"
 			rec.Message = fmt.Sprintf("first IMAP bounce check failed: %v; second check will still run", err)
 			rec.NextCheckAt = time.Now().Add(s.cfg.SecondBounceDelay).Unix()
 			rec.Finalized = false
@@ -477,7 +482,7 @@ func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store
 		event = "verify.bounced"
 	} else {
 		if checkNumber == 1 {
-			rec.Status = "pending_bounce_check"
+			rec.Status = "valid"
 			rec.Message = "no bounce detected in first IMAP check; second check scheduled"
 			rec.NextCheckAt = time.Now().Add(s.cfg.SecondBounceDelay).Unix()
 			rec.Finalized = false

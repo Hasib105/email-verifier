@@ -414,6 +414,10 @@ func TestBounceCheckProcess_NoBounce(t *testing.T) {
 		t.Errorf("Expected check_count to be 1, got: %d", processedRecord.CheckCount)
 	}
 
+	if processedRecord.Status != "valid" {
+		t.Errorf("Expected status 'valid' after first no-bounce check, got: %s", processedRecord.Status)
+	}
+
 	if processedRecord.NextCheckAt == 0 {
 		t.Error("Expected second check to be scheduled after first no-bounce check")
 	}
@@ -658,7 +662,7 @@ func simulateBounceCheck(repo *MockRepository, webhook *MockWebhookDispatcher, r
 		event = "verify.bounced"
 	} else {
 		if checkNumber == 1 {
-			rec.Status = "pending_bounce_check"
+			rec.Status = "valid"
 			rec.Message = "no bounce detected in first IMAP check; second check scheduled"
 			rec.NextCheckAt = time.Now().Add(6 * time.Hour).Unix()
 			rec.Finalized = false
