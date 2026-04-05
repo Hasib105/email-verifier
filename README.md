@@ -73,6 +73,15 @@ go build -o verifier-cli ./cmd/cli
 ./verifier-cli signup
 ```
 
+### Create A Superuser In Docker
+
+Build the image, then run the CLI entrypoint from the same runtime image:
+
+```bash
+docker build -t email-verifier-api .
+docker run --rm -it --entrypoint ./cli email-verifier-api createsuperuser
+```
+
 ### Frontend
 
 ```bash
