@@ -15,7 +15,7 @@ import type {
   VerifyResponse,
 } from './types'
 
-export const DEFAULT_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() || '/api'
+export const DEFAULT_BASE_URL = '/api'
 
 export interface ApiConfig {
   baseUrl: string

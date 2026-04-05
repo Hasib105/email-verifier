@@ -86,7 +86,6 @@ docker run --rm -it --entrypoint ./cli email-verifier-api createsuperuser
 
 ```bash
 cd web
-cp .env.example .env
 npm install
 npm run dev
 ```
