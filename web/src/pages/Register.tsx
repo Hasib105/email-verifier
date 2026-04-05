@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { DEFAULT_BASE_URL } from '../api';
 import { useAuth } from '../context/AuthContext';
 
 export function Register() {
@@ -140,7 +141,7 @@ export function Register() {
             type="url" 
             value={apiUrl}
             onChange={(e) => setApiUrl(e.target.value)}
-            placeholder="http://localhost:3000"
+            placeholder={DEFAULT_BASE_URL}
             className="block w-full rounded-md border-gray-300 shadow-sm focus:border-yellow-500 focus:ring-yellow-500 sm:text-sm p-2 border"
           />
           <button

@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
 import type { User } from '../types';
-import { api, storageKeys, type ApiConfig } from '../api';
+import { api, DEFAULT_BASE_URL, storageKeys, type ApiConfig } from '../api';
 
 interface AuthContextType {
   user: User | null;
@@ -18,11 +18,21 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
+const legacyBaseUrls = new Set(['http://localhost:3000', 'https://localhost:3000']);
+
+const resolveInitialBaseUrl = () => {
+  const storedBaseUrl = localStorage.getItem(storageKeys.baseUrl);
+  if (!storedBaseUrl || legacyBaseUrls.has(storedBaseUrl)) {
+    localStorage.setItem(storageKeys.baseUrl, DEFAULT_BASE_URL);
+    return DEFAULT_BASE_URL;
+  }
+  return storedBaseUrl;
+};
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [apiKey, setApiKey] = useState(() => localStorage.getItem(storageKeys.apiKey) || '');
-  const [baseUrl, setBaseUrlState] = useState(() => localStorage.getItem(storageKeys.baseUrl) || 'http://localhost:3000');
+  const [baseUrl, setBaseUrlState] = useState(resolveInitialBaseUrl);
   const [isLoading, setIsLoading] = useState(true);
 
   const config: ApiConfig = { baseUrl, apiKey };
