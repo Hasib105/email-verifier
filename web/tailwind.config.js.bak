@@ -5,22 +5,15 @@ export default {
   theme: {
     extend: {
       borderRadius: {
-        lg: '0',
-        md: '0',
-        sm: '0',
-      },
-      boxShadow: {
-        sm: '3px 3px 0px 0px #7c3aed',
-        DEFAULT: '5px 5px 0px 0px #7c3aed',
-        md: '6px 6px 0px 0px #7c3aed',
-        lg: '8px 8px 0px 0px #7c3aed',
-        xl: '12px 12px 0px 0px #7c3aed',
+        lg: '0.5rem',
+        md: 'calc(0.5rem - 2px)',
+        sm: 'calc(0.5rem - 4px)',
       },
       colors: {
-        border: '#111827',
-        input: '#111827',
-        ring: '#7c3aed',
-        background: '#f9fafb',
+        border: '#e5e7eb',
+        input: '#d1d5db',
+        ring: '#111827',
+        background: '#f3f4f6',
         foreground: '#111827',
         primary: {
           DEFAULT: '#111827',
@@ -31,7 +24,7 @@ export default {
           foreground: '#111827',
         },
         muted: {
-          DEFAULT: '#f3f4f6',
+          DEFAULT: '#f9fafb',
           foreground: '#6b7280',
         },
         card: {
@@ -39,7 +32,7 @@ export default {
           foreground: '#111827',
         },
         destructive: {
-          DEFAULT: '#ef4444',
+          DEFAULT: '#b91c1c',
           foreground: '#ffffff',
         },
       },
@@ -47,3 +40,4 @@ export default {
   },
   plugins: [require('tailwindcss-animate')],
 }
+

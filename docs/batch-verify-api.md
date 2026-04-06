@@ -1,6 +1,6 @@
 # Batch Verify API Integration Guide
 
-This guide shows how backend services can call `/verify/batch` safely with the hardened V1 response model.
+This guide shows how backend services can call `/verify/batch` safely with the hardened V1 response model and webhook-first async updates.
 
 ## Endpoint
 
@@ -73,6 +73,7 @@ Notes:
 - `accepted` means the API processed the item, not that the mailbox is `valid`.
 - Use `status` together with `confidence`, `deterministic`, and `signal_summary`.
 - `pending_bounce_check` means the probe workflow is still active.
+- Treat `pending_bounce_check` as asynchronous and wait for webhook events to finalize those records.
 
 ## Error Responses
 
@@ -93,8 +94,9 @@ Example:
 2. Submit each chunk to `/verify/batch`.
 3. Persist `id`, `email`, `status`, `confidence`, `reason_code`, and `expires_at`.
 4. Use finalized results immediately.
-5. Poll only items that remain `pending_bounce_check`.
-6. Re-query expired items instead of assuming the old result still holds.
+5. Configure `/users/webhook` and process webhook events for items that remain `pending_bounce_check`.
+6. Use `GET /verifications/{id}` only for reconciliation if your webhook receiver was temporarily unavailable.
+7. Re-query expired items instead of assuming the old result still holds.
 
 ## Go Example
 
@@ -221,24 +223,80 @@ func (c *Client) ListVerifications(limit, offset int) (*ListVerificationsRespons
 	return &out, nil
 }
 
-func (c *Client) WaitUntilFinalized(id string, interval time.Duration, maxAttempts int) (*VerifyItem, error) {
-	for i := 0; i < maxAttempts; i++ {
-		item, err := c.GetVerificationByID(id)
-		if err != nil {
-			return nil, err
-		}
-		if item.Finalized {
-			return item, nil
-		}
-		time.Sleep(interval)
-	}
-	return nil, fmt.Errorf("verification %s not finalized after %d attempts", id, maxAttempts)
+func (c *Client) UpdateWebhook(webhookURL string) error {
+	req := map[string]string{"webhook_url": webhookURL}
+	return c.doJSON(http.MethodPut, "/users/webhook", req, nil)
+}
+
+func (c *Client) SendTestWebhook(webhookURL string) error {
+	req := map[string]string{"webhook_url": webhookURL}
+	return c.doJSON(http.MethodPost, "/users/webhook/test", req, nil)
 }
 ```
 
-## Pulling Results
+## Webhook-First Result Flow
 
 1. Call `/verify/batch` and store `items[i].id`.
 2. Use items with `finalized=true` immediately.
-3. Poll `/verifications/{id}` for items with `status=pending_bounce_check`.
-4. Re-verify items after `expires_at`.
+3. For items with `status=pending_bounce_check`, wait for webhook events and update your stored result by `id`.
+4. If webhook delivery is interrupted, reconcile via `GET /verifications/{id}`.
+5. Re-verify items after `expires_at`.
+
+Webhook status-update events use the same verification `id` and follow the same semantics as single-email verification (`POST /verify`).
+
+Common verification events:
+
+- `verify.created`
+- `verify.check.first.no_bounce`
+- `verify.check.second.no_bounce`
+- `verify.check.first.error`
+- `verify.check.second.error`
+- `verify.bounced`
+
+## Webhook Receiver Example (Go)
+
+```go
+package main
+
+import (
+	"encoding/json"
+	"log"
+	"net/http"
+)
+
+type VerificationWebhookPayload struct {
+	Event            string `json:"event"`
+	ID               string `json:"id"`
+	Email            string `json:"email"`
+	Status           string `json:"status"`
+	Message          string `json:"message"`
+	Source           string `json:"source"`
+	UserID           string `json:"user_id"`
+	CheckCount       int    `json:"check_count"`
+	Finalized        bool   `json:"finalized"`
+	CheckedAt        int64  `json:"checked_at"`
+	Confidence       string `json:"confidence"`
+	Deterministic    bool   `json:"deterministic"`
+	ReasonCode       string `json:"reason_code"`
+	VerificationPath string `json:"verification_path"`
+	SignalSummary    string `json:"signal_summary"`
+	ExpiresAt        int64  `json:"expires_at"`
+}
+
+func verificationWebhookHandler(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	var payload VerificationWebhookPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	// Idempotency recommendation: upsert by payload.ID and ignore stale updates.
+	log.Printf("event=%s id=%s status=%s finalized=%v", payload.Event, payload.ID, payload.Status, payload.Finalized)
+
+	w.WriteHeader(http.StatusNoContent)
+}
+```
+
+For full webhook setup, payload details, and endpoint examples, see [`docs/webhook-api.md`](./webhook-api.md).

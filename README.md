@@ -201,6 +201,15 @@ X-API-Key: <your-api-key>
 - `GET /verifications/:id`
 - `GET /verifications/stats`
 
+### Webhooks
+
+- `PUT /users/webhook`
+- `POST /users/webhook/test`
+
+For async states like `pending_bounce_check`, use webhook events as the primary update channel and keep `GET /verifications/:id` for reconciliation only.
+Webhook notifications apply to results created by both `POST /verify` and `POST /verify/batch`.
+When a verification status changes later (for example, `pending_bounce_check` -> `bounced` or `valid`), the service triggers another webhook event for the same verification `id` so your system can update status immediately.
+
 ### SMTP Accounts And Templates
 
 - `POST /smtp-accounts`
@@ -261,6 +270,7 @@ The absence of a bounce is treated as heuristic evidence, not mailbox proof.
 ## Additional Docs
 
 - [Batch verify API guide](./docs/batch-verify-api.md)
+- [Webhook integration guide](./docs/webhook-api.md)
 - [Deploy notes](./deploy/README.md)
 
 ## License
