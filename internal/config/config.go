@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -12,6 +13,7 @@ type Config struct {
 	APIKey             string
 	VerifierMailFrom   string
 	VerifierEHLODomain string
+	SMTPProxyPool      []string
 	MaxConcurrency     int
 	Timeout            time.Duration
 	DatabaseDSN        string
@@ -40,6 +42,7 @@ func Load() *Config {
 		APIKey:             getEnv("API_KEY", "secret-key-change-me"),
 		VerifierMailFrom:   getEnv("VERIFIER_MAIL_FROM", "verify@localhost"),
 		VerifierEHLODomain: getEnv("VERIFIER_EHLO_DOMAIN", "localhost"),
+		SMTPProxyPool:      getEnvList("SMTP_PROXY_POOL"),
 		MaxConcurrency:     getEnvInt("MAX_CONCURRENCY", 10),
 		Timeout:            getEnvDuration("TIMEOUT", 20*time.Second),
 		DBHost:             getEnv("DB_HOST", "postgres"),
@@ -52,7 +55,7 @@ func Load() *Config {
 		WebhookURL:     getEnv("WEBHOOK_URL", ""),
 		WebhookTimeout: getEnvDuration("WEBHOOK_TIMEOUT", 10*time.Second),
 
-		CheckInterval:     getEnvDuration("CHECK_INTERVAL", 1*time.Minute),
+		CheckInterval:     getEnvDuration("CHECK_INTERVAL", 15*time.Second),
 		FirstBounceDelay:  getEnvDuration("FIRST_BOUNCE_DELAY", 1*time.Minute),
 		SecondBounceDelay: getEnvDuration("SECOND_BOUNCE_DELAY", 6*time.Hour),
 		HardResultTTL:     getEnvDuration("HARD_RESULT_TTL", 7*24*time.Hour),
@@ -107,4 +110,23 @@ func getEnvDuration(key string, defaultVal time.Duration) time.Duration {
 		return defaultVal
 	}
 	return value
+}
+
+func getEnvList(key string) []string {
+	raw := strings.TrimSpace(getEnv(key, ""))
+	if raw == "" {
+		return nil
+	}
+
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	})
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
 }

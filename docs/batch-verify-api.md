@@ -72,8 +72,8 @@ Notes:
 
 - `accepted` means the API processed the item, not that the mailbox is `valid`.
 - Use `status` together with `confidence`, `deterministic`, and `signal_summary`.
-- `pending_bounce_check` means the probe workflow is still active.
-- Treat `pending_bounce_check` as asynchronous and wait for webhook events to finalize those records.
+- `pending_bounce_check` means the probe workflow is still waiting for the first bounce window.
+- A probe result can be `valid` with `finalized=false` after the first no-bounce check; keep listening for the second check.
 
 ## Error Responses
 
@@ -94,7 +94,7 @@ Example:
 2. Submit each chunk to `/verify/batch`.
 3. Persist `id`, `email`, `status`, `confidence`, `reason_code`, and `expires_at`.
 4. Use finalized results immediately.
-5. Configure `/users/webhook` and process webhook events for items that remain `pending_bounce_check`.
+5. Configure `/users/webhook` and process webhook events for items that remain `pending_bounce_check` or have `finalized=false`.
 6. Use `GET /verifications/{id}` only for reconciliation if your webhook receiver was temporarily unavailable.
 7. Re-query expired items instead of assuming the old result still holds.
 
@@ -238,7 +238,7 @@ func (c *Client) SendTestWebhook(webhookURL string) error {
 
 1. Call `/verify/batch` and store `items[i].id`.
 2. Use items with `finalized=true` immediately.
-3. For items with `status=pending_bounce_check`, wait for webhook events and update your stored result by `id`.
+3. For items with `status=pending_bounce_check` or `finalized=false`, wait for webhook events and update your stored result by `id`.
 4. If webhook delivery is interrupted, reconcile via `GET /verifications/{id}`.
 5. Re-verify items after `expires_at`.
 
@@ -251,7 +251,7 @@ Common verification events:
 - `verify.check.second.no_bounce`
 - `verify.check.first.error`
 - `verify.check.second.error`
-- `verify.bounced`
+- `verify.invalid`
 
 ## Webhook Receiver Example (Go)
 

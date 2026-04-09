@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { Settings } from 'lucide-react';
 import { DEFAULT_BASE_URL } from '../api';
 import { useAuth } from '../context/AuthContext';
 
@@ -17,7 +18,7 @@ export function Login() {
     e.preventDefault();
     setError('');
     setLoading(true);
-    
+
     try {
       await login(email, password);
       navigate('/dashboard');
@@ -34,88 +35,90 @@ export function Login() {
   };
 
   return (
-    <div className="w-full">
-      <div className="text-center mb-8">
-        <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-yellow-400 to-yellow-600">Welcome Back</h1>
-        <p className="text-gray-500 mt-2 text-sm">Sign in to access your verifier dashboard</p>
+    <div>
+      <div className="mb-8">
+        <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Welcome back</p>
+        <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">Sign in</h1>
+        <p className="mt-2 text-sm text-slate-500">Access your verification console.</p>
       </div>
 
       {error && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-md text-sm">
+        <div className="mb-5 border border-red-200 bg-red-50 p-3 text-sm text-red-700">
           {error}
         </div>
       )}
 
-      <form onSubmit={handleLogin} className="space-y-4">
+      <form className="space-y-4" onSubmit={handleLogin}>
         <div>
-          <label className="block text-sm font-medium text-gray-700">Email</label>
-          <input 
-            type="email" 
-            value={email}
+          <label className="block text-sm font-semibold text-slate-700">Email</label>
+          <input
+            className="mt-1 block h-11 w-full border border-slate-300 px-3 text-sm text-slate-950 outline-none transition-colors placeholder:text-slate-400 focus:border-slate-950 focus:ring-1 focus:ring-slate-950"
             onChange={(e) => setEmail(e.target.value)}
             placeholder="you@example.com"
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-yellow-500 focus:ring-yellow-500 sm:text-sm p-3 border"
             required
+            type="email"
+            value={email}
           />
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700">Password</label>
-          <input 
-            type="password" 
-            value={password}
+          <label className="block text-sm font-semibold text-slate-700">Password</label>
+          <input
+            className="mt-1 block h-11 w-full border border-slate-300 px-3 text-sm text-slate-950 outline-none transition-colors placeholder:text-slate-400 focus:border-slate-950 focus:ring-1 focus:ring-slate-950"
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="••••••••"
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-yellow-500 focus:ring-yellow-500 sm:text-sm p-3 border"
+            placeholder="Password"
             required
+            type="password"
+            value={password}
           />
         </div>
 
-        <button 
-          type="submit"
+        <button
+          className="flex h-11 w-full items-center justify-center bg-slate-950 px-4 text-sm font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
           disabled={loading}
-          className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-black hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black disabled:opacity-50"
+          type="submit"
         >
           {loading ? 'Signing in...' : 'Sign in'}
         </button>
       </form>
 
       <div className="mt-6 text-center text-sm">
-        <span className="text-gray-500">Don't have an account? </span>
-        <Link to="/auth/register" className="font-medium text-yellow-600 hover:text-yellow-500">
-          Sign up
+        <span className="text-slate-500">No account yet? </span>
+        <Link className="font-semibold text-slate-950 underline-offset-4 hover:underline" to="/auth/register">
+          Create one
         </Link>
       </div>
 
-      <div className="mt-4 text-center">
+      <div className="mt-6 border-t border-slate-200 pt-5">
         <button
-          type="button"
+          className="inline-flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-slate-950"
           onClick={() => setShowSettings(!showSettings)}
-          className="text-xs text-gray-400 hover:text-gray-600"
+          type="button"
         >
+          <Settings className="h-4 w-4" />
           API Settings
         </button>
-      </div>
 
-      {showSettings && (
-        <div className="mt-4 p-4 bg-gray-50 rounded-md border">
-          <label className="block text-sm font-medium text-gray-700 mb-2">API Base URL</label>
-          <input 
-            type="url" 
-            value={apiUrl}
-            onChange={(e) => setApiUrl(e.target.value)}
-            placeholder={DEFAULT_BASE_URL}
-            className="block w-full rounded-md border-gray-300 shadow-sm focus:border-yellow-500 focus:ring-yellow-500 sm:text-sm p-2 border"
-          />
-          <button
-            type="button"
-            onClick={handleSaveSettings}
-            className="mt-2 w-full py-2 px-4 border border-gray-300 rounded-md text-sm text-gray-700 hover:bg-gray-100"
-          >
-            Save Settings
-          </button>
-        </div>
-      )}
+        {showSettings && (
+          <div className="mt-4 border border-slate-200 bg-slate-50 p-4">
+            <label className="block text-sm font-semibold text-slate-700">API Base URL</label>
+            <input
+              className="mt-2 block h-10 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-950 focus:ring-1 focus:ring-slate-950"
+              onChange={(e) => setApiUrl(e.target.value)}
+              placeholder={DEFAULT_BASE_URL}
+              type="url"
+              value={apiUrl}
+            />
+            <button
+              className="mt-3 h-9 w-full border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-950 hover:bg-slate-100"
+              onClick={handleSaveSettings}
+              type="button"
+            >
+              Save Settings
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

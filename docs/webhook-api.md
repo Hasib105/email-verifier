@@ -4,7 +4,7 @@ This guide explains how to receive asynchronous verification updates through web
 
 ## Why Webhooks
 
-Some verifications start in `pending_bounce_check` and finalize later after IMAP bounce checks. Webhooks let you receive updates without polling.
+Some verifications start in `pending_bounce_check`, then may become provisional `valid` before finalizing after IMAP bounce checks. Webhooks let you receive updates without polling.
 
 Webhook behavior covers both verification entry points:
 
@@ -70,13 +70,13 @@ The service emits these verification events:
 - `verify.check.second.no_bounce`
 - `verify.check.first.error`
 - `verify.check.second.error`
-- `verify.bounced`
+- `verify.invalid`
 
 Typical status progression for fallback cases:
 
-- `pending_bounce_check` -> `pending_bounce_check` (`verify.check.first.no_bounce`)
-- `pending_bounce_check` -> `bounced` (`verify.bounced`)
-- `pending_bounce_check` -> `valid` (`verify.check.second.no_bounce`)
+- `pending_bounce_check` -> `valid` with `finalized=false` (`verify.check.first.no_bounce`)
+- `valid` -> `invalid` (`verify.invalid`)
+- `valid` -> `valid` with `finalized=true` (`verify.check.second.no_bounce`)
 - `pending_bounce_check` -> `error` (`verify.check.second.error`)
 
 ## Webhook Payload

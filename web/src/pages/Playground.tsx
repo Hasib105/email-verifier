@@ -1,8 +1,37 @@
-import { useState } from 'react';
-import { Mail, CheckCircle2, AlertCircle, Clock, Loader2, Server } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { AlertCircle, CheckCircle2, Clock, Loader2, Mail, Server } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
-import type { VerifyResponse } from '../types';
+import type { VerificationRecord, VerifyResponse } from '../types';
+
+const statusBadge = (status: string) => {
+  const map: Record<string, string> = {
+    valid: 'bg-emerald-50 text-emerald-700',
+    invalid: 'bg-red-50 text-red-700',
+    bounced: 'bg-red-50 text-red-700',
+    pending_bounce_check: 'bg-amber-50 text-amber-700',
+    greylisted: 'bg-orange-50 text-orange-700',
+    error: 'bg-slate-100 text-slate-700',
+  };
+  return map[status] || 'bg-slate-100 text-slate-700';
+};
+
+const resultFromRecord = (record: VerificationRecord, previous: VerifyResponse): VerifyResponse => ({
+  id: record.id,
+  email: record.email,
+  status: record.status,
+  message: record.message,
+  source: record.source,
+  cached: previous.cached,
+  finalized: record.finalized,
+  next_check_at: record.next_check_at || undefined,
+  confidence: record.confidence,
+  deterministic: record.deterministic,
+  reason_code: record.reason_code,
+  verification_path: record.verification_path,
+  signal_summary: record.signal_summary,
+  expires_at: record.expires_at,
+});
 
 export function Playground() {
   const { config } = useAuth();
@@ -10,6 +39,23 @@ export function Playground() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<VerifyResponse | null>(null);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!result?.id || result.finalized) {
+      return undefined;
+    }
+
+    const refreshTimer = window.setInterval(async () => {
+      try {
+        const record = await api.getVerification(config, result.id);
+        setResult((current) => (current ? resultFromRecord(record, current) : current));
+      } catch {
+        // Keep the current result visible if a background refresh fails.
+      }
+    }, 15000);
+
+    return () => window.clearInterval(refreshTimer);
+  }, [config, result?.finalized, result?.id]);
 
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -29,155 +75,112 @@ export function Playground() {
     }
   };
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
+  const StatusIcon = () => {
+    switch (result?.status) {
       case 'valid':
-        return <CheckCircle2 className="w-8 h-8 text-green-500" />;
+        return <CheckCircle2 className="h-5 w-5 text-emerald-600" />;
       case 'invalid':
       case 'bounced':
       case 'error':
-        return <AlertCircle className="w-8 h-8 text-red-500" />;
+        return <AlertCircle className="h-5 w-5 text-red-600" />;
       case 'pending_bounce_check':
       case 'greylisted':
-        return <Clock className="w-8 h-8 text-yellow-500" />;
+        return <Clock className="h-5 w-5 text-amber-600" />;
       default:
-        return <AlertCircle className="w-8 h-8 text-gray-500" />;
-    }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'valid':
-        return 'bg-green-100 text-green-800 border-green-200';
-      case 'invalid':
-      case 'bounced':
-        return 'bg-red-100 text-red-800 border-red-200';
-      case 'pending_bounce_check':
-      case 'greylisted':
-        return 'bg-yellow-100 text-yellow-800 border-yellow-200';
-      case 'error':
-      default:
-        return 'bg-gray-100 text-gray-800 border-gray-200';
+        return <Server className="h-5 w-5 text-slate-500" />;
     }
   };
 
   return (
-    <div className="p-8 max-w-4xl mx-auto">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold mb-2 flex items-center gap-2">
-          <Mail className="w-6 h-6 text-yellow-500" />
-          Verification Playground
-        </h1>
-        <p className="text-gray-600">
-          Test the email verification API instantly. Enter an email address below to see real-time results.
-        </p>
+    <div className="mx-auto max-w-[1120px] space-y-6">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Verification tool</p>
+        <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">Playground</h1>
+        <p className="mt-1 text-sm text-slate-500">Run a single email check and inspect the returned signal detail. Pending results refresh every 15 seconds.</p>
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm border p-6 mb-8">
-        <form onSubmit={handleVerify} className="flex gap-4">
-          <div className="flex-1 relative">
-            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <Mail className="h-5 w-5 text-gray-400" />
-            </div>
+      <section className="border border-slate-200 bg-white p-5">
+        <form className="flex flex-col gap-3 sm:flex-row" onSubmit={handleVerify}>
+          <label className="relative flex-1">
+            <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <input
-              type="email"
-              required
-              className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-yellow-500 focus:border-yellow-500 sm:text-sm transition-colors"
-              placeholder="Enter email address to verify (e.g. test@example.com)"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              className="h-11 w-full border border-slate-300 pl-10 pr-3 text-sm text-slate-950 outline-none transition-colors placeholder:text-slate-400 focus:border-slate-950 focus:ring-1 focus:ring-slate-950"
               disabled={loading}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="test@example.com"
+              required
+              type="email"
+              value={email}
             />
-          </div>
+          </label>
           <button
-            type="submit"
+            className="inline-flex h-11 items-center justify-center gap-2 bg-slate-950 px-5 text-sm font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
             disabled={loading || !email}
-            className="inline-flex items-center px-6 py-3 border border-transparent text-sm font-medium rounded-lg shadow-sm text-white bg-yellow-600 hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            type="submit"
           >
-            {loading ? (
-              <>
-                <Loader2 className="animate-spin -ml-1 mr-2 h-5 w-5" />
-                Verifying...
-              </>
-            ) : (
-              'Verify Email'
-            )}
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+            {loading ? 'Verifying...' : 'Verify Email'}
           </button>
         </form>
-      </div>
+      </section>
 
       {error && (
-        <div className="bg-red-50 border-l-4 border-red-400 p-4 mb-8 text-red-700 rounded-r-lg">
-          <div className="flex">
-            <div className="flex-shrink-0">
-              <AlertCircle className="h-5 w-5 text-red-400" />
-            </div>
-            <div className="ml-3">
-              <p className="text-sm font-medium">{error}</p>
-            </div>
-          </div>
+        <div className="border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          {error}
         </div>
       )}
 
       {result && (
-        <div className="bg-white rounded-xl shadow-sm border overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
-          <div className="px-6 py-5 border-b bg-gray-50 flex items-center justify-between">
-            <h3 className="text-lg font-medium leading-6 text-gray-900 flex items-center gap-2">
-              <Server className="w-5 h-5 text-gray-500" />
-              Verification Result
-            </h3>
-            <span className={`px-3 py-1 rounded-full text-xs font-semibold border uppercase tracking-wider ${getStatusColor(result.status)}`}>
+        <section className="border border-slate-200 bg-white">
+          <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <span className="flex h-9 w-9 items-center justify-center border border-slate-200 bg-white">
+                <StatusIcon />
+              </span>
+              <div>
+                <h2 className="text-base font-bold text-slate-950">Verification Result</h2>
+                <p className="text-sm text-slate-500">{result.email}</p>
+              </div>
+            </div>
+            <span className={`inline-flex w-fit px-2.5 py-1 text-xs font-semibold uppercase tracking-wider ${statusBadge(result.status)}`}>
               {result.status.replace(/_/g, ' ')}
             </span>
           </div>
-          <div className="px-6 py-6">
-            <div className="flex items-start gap-6">
-              <div className="flex-shrink-0">
-                {getStatusIcon(result.status)}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-1">Target Email</p>
-                <p className="text-xl font-bold text-gray-900 mb-4">{result.email}</p>
-                
-                <div className="bg-gray-50 rounded-lg p-4 border border-gray-100 mb-6">
-                  <p className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-2">Message Detail</p>
-                  <p className="text-gray-900">{result.message}</p>
-                </div>
 
-                <dl className="grid grid-cols-1 gap-x-4 gap-y-6 sm:grid-cols-2">
-                  <div className="sm:col-span-1">
-                    <dt className="text-sm font-medium text-gray-500 uppercase tracking-wider">Source</dt>
-                    <dd className="mt-1 text-sm text-gray-900">{result.source}</dd>
-                  </div>
-                  <div className="sm:col-span-1">
-                    <dt className="text-sm font-medium text-gray-500 uppercase tracking-wider">Confidence</dt>
-                    <dd className="mt-1 text-sm text-gray-900 capitalize">{result.confidence}</dd>
-                  </div>
-                  <div className="sm:col-span-1">
-                    <dt className="text-sm font-medium text-gray-500 uppercase tracking-wider">Cached</dt>
-                    <dd className="mt-1 text-sm text-gray-900">{result.cached ? 'Yes' : 'No'}</dd>
-                  </div>
-                  <div className="sm:col-span-1">
-                    <dt className="text-sm font-medium text-gray-500 uppercase tracking-wider">Finalized</dt>
-                    <dd className="mt-1 text-sm text-gray-900">{result.finalized ? 'Yes' : 'No'}</dd>
-                  </div>
-                  <div className="sm:col-span-1">
-                    <dt className="text-sm font-medium text-gray-500 uppercase tracking-wider">Deterministic</dt>
-                    <dd className="mt-1 text-sm text-gray-900">{result.deterministic ? 'Yes' : 'No'}</dd>
-                  </div>
-                  <div className="sm:col-span-1">
-                    <dt className="text-sm font-medium text-gray-500 uppercase tracking-wider">Verification Path</dt>
-                    <dd className="mt-1 text-sm text-gray-900">{result.verification_path.replace(/_/g, ' ')}</dd>
-                  </div>
-                  <div className="sm:col-span-2">
-                    <dt className="text-sm font-medium text-gray-500 uppercase tracking-wider">Signal Summary</dt>
-                    <dd className="mt-1 text-sm text-gray-900">{result.signal_summary}</dd>
-                  </div>
-                </dl>
-              </div>
+          <div className="grid gap-0 lg:grid-cols-[1fr_340px]">
+            <div className="border-b border-slate-200 p-5 lg:border-b-0 lg:border-r">
+              <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Message Detail</p>
+              <p className="mt-3 text-sm leading-6 text-slate-700">{result.message}</p>
+              {!result.finalized && result.next_check_at && (
+                <p className="mt-3 text-sm text-amber-700">
+                  Next backend bounce check: {new Date(result.next_check_at * 1000).toLocaleString()}
+                </p>
+              )}
+              {result.signal_summary && (
+                <div className="mt-5 border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Signal Summary</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-700">{result.signal_summary}</p>
+                </div>
+              )}
             </div>
+
+            <dl className="grid grid-cols-2 border-slate-200 text-sm lg:grid-cols-1">
+              {[
+                ['Source', result.source],
+                ['Confidence', result.confidence],
+                ['Cached', result.cached ? 'Yes' : 'No'],
+                ['Finalized', result.finalized ? 'Yes' : 'No'],
+                ['Deterministic', result.deterministic ? 'Yes' : 'No'],
+                ['Path', result.verification_path.replace(/_/g, ' ')],
+              ].map(([label, value]) => (
+                <div className="border-b border-r border-slate-200 p-4 last:border-b-0 lg:border-r-0" key={label}>
+                  <dt className="text-xs font-semibold uppercase tracking-widest text-slate-500">{label}</dt>
+                  <dd className="mt-1 capitalize text-slate-950">{value}</dd>
+                </div>
+              ))}
+            </dl>
           </div>
-        </div>
+        </section>
       )}
     </div>
   );

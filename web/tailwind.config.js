@@ -5,23 +5,25 @@ export default {
   theme: {
     extend: {
       borderRadius: {
-        lg: '0',
-        md: '0',
-        sm: '0',
+        sm: '4px',
+        md: '6px',
+        lg: '8px',
+        xl: '8px',
+        '2xl': '8px',
       },
       boxShadow: {
-        sm: '3px 3px 0px 0px #7c3aed',
-        DEFAULT: '5px 5px 0px 0px #7c3aed',
-        md: '6px 6px 0px 0px #7c3aed',
-        lg: '8px 8px 0px 0px #7c3aed',
-        xl: '12px 12px 0px 0px #7c3aed',
+        sm: '0 1px 2px 0 rgb(15 23 42 / 0.06)',
+        DEFAULT: '0 8px 24px -18px rgb(15 23 42 / 0.35)',
+        md: '0 14px 36px -24px rgb(15 23 42 / 0.35)',
+        lg: '0 22px 60px -34px rgb(15 23 42 / 0.45)',
+        xl: '0 28px 80px -44px rgb(15 23 42 / 0.5)',
       },
       colors: {
-        border: '#111827',
-        input: '#111827',
-        ring: '#7c3aed',
-        background: '#f9fafb',
-        foreground: '#111827',
+        border: '#e5e7eb',
+        input: '#d1d5db',
+        ring: '#111827',
+        background: '#f8fafc',
+        foreground: '#0f172a',
         primary: {
           DEFAULT: '#111827',
           foreground: '#ffffff',

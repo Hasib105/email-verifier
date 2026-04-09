@@ -1,8 +1,27 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { RefreshCw, Trash2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
 import type { VerificationRecord } from '../types';
+
+const statusBadge = (status: string) => {
+  const statusMap: Record<string, string> = {
+    valid: 'bg-emerald-50 text-emerald-700',
+    invalid: 'bg-red-50 text-red-700',
+    bounced: 'bg-red-50 text-red-700',
+    pending_bounce_check: 'bg-amber-50 text-amber-700',
+    greylisted: 'bg-orange-50 text-orange-700',
+    error: 'bg-slate-100 text-slate-700',
+    unknown: 'bg-slate-100 text-slate-700',
+    disposable: 'bg-sky-50 text-sky-700',
+  };
+  return statusMap[status] || statusMap.unknown;
+};
+
+const formatDate = (timestamp: number) => {
+  if (!timestamp) return '-';
+  return new Date(timestamp * 1000).toLocaleString();
+};
 
 export function EmailStatus() {
   const { config } = useAuth();
@@ -13,8 +32,10 @@ export function EmailStatus() {
   const [offset, setOffset] = useState(0);
   const limit = 20;
 
-  const loadVerifications = useCallback(async () => {
-    setLoading(true);
+  const loadVerifications = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoading(true);
+    }
     try {
       const response = await api.listVerifications(config, limit, offset);
       setVerifications(response.items || []);
@@ -22,12 +43,19 @@ export function EmailStatus() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load verifications');
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
-  }, [config, limit, offset]);
+  }, [config, offset]);
 
   useEffect(() => {
-    loadVerifications();
+    void loadVerifications();
+    const refreshTimer = window.setInterval(() => {
+      void loadVerifications(true);
+    }, 15000);
+
+    return () => window.clearInterval(refreshTimer);
   }, [loadVerifications]);
 
   const handleDelete = async (id: string) => {
@@ -46,144 +74,134 @@ export function EmailStatus() {
     }
   };
 
-  const getStatusBadge = (status: string) => {
-    const statusMap: Record<string, string> = {
-      valid: 'bg-green-100 text-green-800',
-      invalid: 'bg-red-100 text-red-800',
-      bounced: 'bg-red-100 text-red-800',
-      pending_bounce_check: 'bg-yellow-100 text-yellow-800',
-      greylisted: 'bg-orange-100 text-orange-800',
-      error: 'bg-gray-100 text-gray-800',
-      unknown: 'bg-gray-100 text-gray-800',
-      disposable: 'bg-purple-100 text-purple-800',
-    };
-    return statusMap[status] || 'bg-gray-100 text-gray-800';
-  };
-
-  const formatDate = (timestamp: number) => {
-    if (!timestamp) return '-';
-    return new Date(timestamp * 1000).toLocaleString();
-  };
-
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
+    <div className="mx-auto max-w-[1280px] space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 tracking-tight">Email Status</h2>
-          <p className="text-sm text-gray-500 mt-1">Review validation statuses of your uploaded emails.</p>
+          <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Verification history</p>
+          <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">Email Status</h1>
+          <p className="mt-1 text-sm text-slate-500">Review every checked address and its latest signal state. Auto-refreshes every 15 seconds.</p>
         </div>
         <button
-          onClick={loadVerifications}
+          className="inline-flex h-9 items-center justify-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-950 hover:bg-slate-50 disabled:opacity-50"
           disabled={loading}
-          className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+          onClick={() => loadVerifications()}
+          type="button"
         >
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           Refresh
         </button>
       </div>
 
       {error && (
-        <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm">
+        <div className="border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           {error}
         </div>
       )}
 
-      <div className="bg-white border rounded-xl shadow-sm overflow-hidden">
+      <section className="border border-slate-200 bg-white">
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
-                  <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                  <th className="hidden md:table-cell px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Confidence</th>
-                  <th className="hidden sm:table-cell px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Source</th>
-                  <th className="hidden md:table-cell px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Message</th>
-                  <th className="hidden lg:table-cell px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Checked</th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+          <table className="min-w-full border-collapse text-left">
+            <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-widest text-slate-500">
+              <tr>
+                <th className="border-b border-slate-200 px-4 py-3">Email</th>
+                <th className="border-b border-slate-200 px-4 py-3">Status</th>
+                <th className="hidden border-b border-slate-200 px-4 py-3 md:table-cell">Confidence</th>
+                <th className="hidden border-b border-slate-200 px-4 py-3 sm:table-cell">Source</th>
+                <th className="hidden border-b border-slate-200 px-4 py-3 lg:table-cell">Message</th>
+                <th className="hidden border-b border-slate-200 px-4 py-3 lg:table-cell">Checked</th>
+                <th className="border-b border-slate-200 px-4 py-3 text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
+            <tbody className="divide-y divide-slate-200">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-8 text-center">
-                    <div className="flex justify-center">
-                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-yellow-500"></div>
-                    </div>
+                  <td className="px-4 py-10 text-center" colSpan={7}>
+                    <div className="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-slate-950" />
                   </td>
                 </tr>
               ) : verifications.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-8 text-center text-gray-500">
-                    No verifications found
+                  <td className="px-4 py-10 text-center text-sm text-slate-500" colSpan={7}>
+                    No verifications found.
                   </td>
                 </tr>
               ) : (
                 verifications.map((item) => {
                   const status = item.status || 'unknown';
-
                   return (
-                  <tr key={item.id} className="hover:bg-gray-50">
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 max-w-[200px] truncate">
-                      {item.email}
-                    </td>
-                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm">
-                      <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusBadge(status)}`}>
-                        {status.replace(/_/g, ' ')}
-                      </span>
-                    </td>
-                    <td className="hidden md:table-cell px-6 py-4 whitespace-nowrap text-sm text-gray-500 capitalize">
-                      {item.confidence || 'low'}
-                    </td>
-                    <td className="hidden sm:table-cell px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {item.source}
-                    </td>
-                    <td className="hidden md:table-cell px-6 py-4 text-sm text-gray-500 max-w-[200px] truncate">
-                      {item.signal_summary || item.message}
-                    </td>
-                    <td className="hidden lg:table-cell px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {formatDate(item.last_checked_at)}
-                    </td>
-                    <td className="px-4 py-4 text-right">
-                      <button
-                        onClick={() => handleDelete(item.id)}
-                        disabled={deletingId === item.id}
-                        className="p-1 text-gray-400 hover:text-red-600 disabled:opacity-50"
-                        title="Delete record"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </td>
-                  </tr>
-                )})
+                    <tr className="hover:bg-slate-50" key={item.id}>
+                      <td className="max-w-[260px] px-4 py-3">
+                        <p className="truncate text-sm font-semibold text-slate-950">{item.email}</p>
+                        <p className="truncate text-xs text-slate-500">{item.reason_code || 'verification record'}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex px-2.5 py-1 text-xs font-semibold capitalize ${statusBadge(status)}`}>
+                          {status.replace(/_/g, ' ')}
+                        </span>
+                        {!item.finalized && item.next_check_at > 0 && (
+                          <p className="mt-1 text-xs text-amber-700">
+                            Next check {new Date(item.next_check_at * 1000).toLocaleTimeString()}
+                          </p>
+                        )}
+                      </td>
+                      <td className="hidden px-4 py-3 text-sm capitalize text-slate-600 md:table-cell">
+                        {item.confidence || 'low'}
+                      </td>
+                      <td className="hidden px-4 py-3 text-sm text-slate-600 sm:table-cell">
+                        {item.source || '-'}
+                      </td>
+                      <td className="hidden max-w-[280px] px-4 py-3 text-sm text-slate-500 lg:table-cell">
+                        <p className="truncate">{item.signal_summary || item.message || '-'}</p>
+                      </td>
+                      <td className="hidden whitespace-nowrap px-4 py-3 text-sm text-slate-500 lg:table-cell">
+                        {formatDate(item.last_checked_at)}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          className="inline-flex h-8 w-8 items-center justify-center text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                          disabled={deletingId === item.id}
+                          onClick={() => handleDelete(item.id)}
+                          title="Delete record"
+                          type="button"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
 
         {verifications.length > 0 && (
-          <div className="px-4 sm:px-6 py-3 bg-gray-50 border-t flex flex-col sm:flex-row justify-between items-center gap-3">
-            <span className="text-sm text-gray-500">
+          <div className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <span className="text-sm text-slate-500">
               Showing {offset + 1} - {offset + verifications.length}
             </span>
             <div className="flex gap-2">
               <button
-                onClick={() => setOffset(Math.max(0, offset - limit))}
+                className="h-8 border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={offset === 0}
-                className="px-3 py-1 text-sm border rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                onClick={() => setOffset(Math.max(0, offset - limit))}
+                type="button"
               >
                 Previous
               </button>
               <button
-                onClick={() => setOffset(offset + limit)}
+                className="h-8 border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={verifications.length < limit}
-                className="px-3 py-1 text-sm border rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                onClick={() => setOffset(offset + limit)}
+                type="button"
               >
                 Next
               </button>
             </div>
           </div>
         )}
-      </div>
+      </section>
     </div>
   );
 }

@@ -575,7 +575,7 @@ func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store
 			event = "verify.check.second.error"
 		}
 	} else if bounced {
-		rec.Status = "bounced"
+		rec.Status = "invalid"
 		rec.Message = reason
 		rec.Confidence = "high"
 		rec.Deterministic = true
@@ -585,16 +585,16 @@ func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store
 		rec.NextCheckAt = 0
 		rec.ExpiresAt = now + int64(s.cfg.HardResultTTL.Seconds())
 		rec.Finalized = true
-		event = "verify.bounced"
+		event = "verify.invalid"
 	} else {
 		if checkNumber == 1 {
-			rec.Status = "pending_bounce_check"
+			rec.Status = "valid"
 			rec.Message = "no bounce observed in the first check window; second check scheduled"
 			rec.Confidence = "low"
 			rec.Deterministic = false
 			rec.ReasonCode = "no_bounce_first_window"
 			rec.VerificationPath = ensureProbePath(rec.VerificationPath)
-			rec.SignalSummary = summarizeLocalSignals(rec.Email, "No bounce has been observed in the first check window. This is not treated as mailbox proof.")
+			rec.SignalSummary = summarizeLocalSignals(rec.Email, "No bounce has been observed in the first check window. The address is marked valid while the second bounce check remains scheduled.")
 			rec.NextCheckAt = time.Now().Add(s.cfg.SecondBounceDelay).Unix()
 			rec.Finalized = false
 			event = "verify.check.first.no_bounce"

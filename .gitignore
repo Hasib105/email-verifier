@@ -2,3 +2,10 @@
 .env
 .env.*
 !.env.example
+
+# Local frontend dev server logs
+web/.vite-dev*.log
+
+# Local Go test cache
+.tmp-gocache/
+*gocache*/

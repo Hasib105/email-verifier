@@ -32,6 +32,7 @@ func main() {
 		cfg.MaxConcurrency,
 		cfg.Timeout,
 	)
+	verifier.SetProxyPool(cfg.SMTPProxyPool)
 
 	verificationRepo, err := repo.New(cfg.ResolveDatabaseDSN())
 	if err != nil {

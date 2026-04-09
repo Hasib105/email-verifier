@@ -2,6 +2,7 @@ package verifier
 
 import (
 	"net/textproto"
+	"strings"
 	"testing"
 )
 
@@ -83,5 +84,28 @@ func TestDirectSignalSummary(t *testing.T) {
 	summary := directSignalSummary("base summary", true, true)
 	if summary != "base summary Provider is on the local strict-provider list. Domain used A/AAAA fallback because no MX records were present." {
 		t.Fatalf("unexpected summary: %q", summary)
+	}
+}
+
+func TestNormalizeProxyPool(t *testing.T) {
+	got := normalizeProxyPool([]string{" proxy.internal:1080 ", "socks5://user:pass@proxy.example.com:1080", ""})
+	want := []string{"socks5://proxy.internal:1080", "socks5://user:pass@proxy.example.com:1080"}
+	if len(got) != len(want) {
+		t.Fatalf("normalizeProxyPool() length = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("normalizeProxyPool()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestRandomControlRecipientUsesDomain(t *testing.T) {
+	got := randomControlRecipient("example.com", "user@example.com")
+	if !strings.HasSuffix(got, "@example.com") {
+		t.Fatalf("randomControlRecipient() = %q, want example.com domain", got)
+	}
+	if strings.Contains(got, "user@example.com") {
+		t.Fatalf("randomControlRecipient() leaked original recipient: %q", got)
 	}
 }

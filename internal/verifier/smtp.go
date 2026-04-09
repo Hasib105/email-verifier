@@ -9,10 +9,13 @@ import (
 	"net/mail"
 	"net/smtp"
 	"net/textproto"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	xproxy "golang.org/x/net/proxy"
 )
 
 type VerifyResult struct {
@@ -44,12 +47,26 @@ type EmailVerifier struct {
 	directSMTPStatus  string
 	lastCheckedAt     int64
 	lastHealthMessage string
+
+	proxyMu    sync.Mutex
+	proxyPool  []string
+	nextProxy  int
+	proxyDial  func(ctx context.Context, network, address string) (net.Conn, string, error)
+	directDial func(ctx context.Context, network, address string) (net.Conn, error)
 }
 
 type mailRouting struct {
 	domain        string
 	hosts         []string
 	usedAFallback bool
+}
+
+func (v *EmailVerifier) SetProxyPool(proxies []string) {
+	v.proxyMu.Lock()
+	defer v.proxyMu.Unlock()
+
+	v.proxyPool = normalizeProxyPool(proxies)
+	v.nextProxy = 0
 }
 
 type calloutAttempt struct {
@@ -182,6 +199,12 @@ func (v *EmailVerifier) Verify(rawEmail string) VerifyResult {
 		result.Deterministic = false
 		result.ReasonCode = "direct_accept_non_strict"
 		result.SignalSummary = directSignalSummary("Recipient MX accepted RCPT on a non-strict provider.", false, routing.usedAFallback)
+	case "catch_all":
+		result.Status = "valid"
+		result.Message = check.message
+		result.Deterministic = false
+		result.ReasonCode = "catch_all_domain"
+		result.SignalSummary = directSignalSummary("Recipient MX accepted the target address and also accepted a random control address, indicating a catch-all domain. Direct SMTP is used as the final signal.", strictProvider, routing.usedAFallback)
 	case "tempfail":
 		result.Status = "greylisted"
 		result.Message = check.message
@@ -264,6 +287,17 @@ func (v *EmailVerifier) checkRecipient(ctx context.Context, routing mailRouting,
 
 		switch attempt.outcome {
 		case "accepted":
+			catchAllAttempt := v.callHost(ctx, host, randomControlRecipient(routing.domain, recipient))
+			result.attempts = append(result.attempts, catchAllAttempt)
+			if catchAllAttempt.outcome == "accepted" {
+				return recipientCheckResult{
+					outcome:      "catch_all",
+					code:         attempt.code,
+					message:      fmt.Sprintf("%s; catch-all domain accepted random control recipient", attempt.message),
+					attempts:     result.attempts,
+					availability: availabilityStatus(connected || catchAllAttempt.connected, true),
+				}
+			}
 			return recipientCheckResult{
 				outcome:      "accepted",
 				code:         attempt.code,
@@ -301,6 +335,22 @@ func (v *EmailVerifier) checkRecipient(ctx context.Context, routing mailRouting,
 }
 
 func (v *EmailVerifier) callHost(ctx context.Context, host, recipient string) calloutAttempt {
+	if v.hasProxyPool() {
+		attempt := v.callHostWithDial(ctx, host, recipient, true)
+		if attempt.outcome == "error" && (attempt.stage == "connect" || attempt.stage == "ehlo") {
+			directAttempt := v.callHostWithDial(ctx, host, recipient, false)
+			if directAttempt.message != "" {
+				directAttempt.message = fmt.Sprintf("%s; proxy fallback was used after: %s", directAttempt.message, attempt.message)
+			}
+			return directAttempt
+		}
+		return attempt
+	}
+
+	return v.callHostWithDial(ctx, host, recipient, false)
+}
+
+func (v *EmailVerifier) callHostWithDial(ctx context.Context, host, recipient string, useProxy bool) calloutAttempt {
 	start := time.Now()
 	attempt := calloutAttempt{
 		host:    host,
@@ -308,14 +358,16 @@ func (v *EmailVerifier) callHost(ctx context.Context, host, recipient string) ca
 		outcome: "error",
 	}
 
-	dialer := &net.Dialer{Timeout: v.Timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, "25"))
+	conn, viaProxy, err := v.dialSMTP(ctx, net.JoinHostPort(host, "25"), useProxy)
 	if err != nil {
 		attempt.message = err.Error()
 		attempt.durationMS = time.Since(start).Milliseconds()
 		return attempt
 	}
 	attempt.connected = true
+	if viaProxy != "" {
+		attempt.message = "connected through proxy " + viaProxy
+	}
 	defer conn.Close()
 
 	client, err := smtp.NewClient(conn, host)
@@ -357,6 +409,90 @@ func (v *EmailVerifier) callHost(ctx context.Context, host, recipient string) ca
 	attempt.message = "250 recipient accepted"
 	attempt.durationMS = time.Since(start).Milliseconds()
 	return attempt
+}
+
+func (v *EmailVerifier) dialSMTP(ctx context.Context, address string, useProxy bool) (net.Conn, string, error) {
+	if useProxy {
+		conn, proxyAddr, err := v.dialViaProxy(ctx, "tcp", address)
+		if err == nil {
+			return conn, proxyAddr, nil
+		}
+		return nil, proxyAddr, err
+	}
+
+	if v.directDial != nil {
+		conn, err := v.directDial(ctx, "tcp", address)
+		return conn, "", err
+	}
+	dialer := &net.Dialer{Timeout: v.Timeout}
+	conn, err := dialer.DialContext(ctx, "tcp", address)
+	return conn, "", err
+}
+
+func (v *EmailVerifier) dialViaProxy(ctx context.Context, network, address string) (net.Conn, string, error) {
+	if v.proxyDial != nil {
+		return v.proxyDial(ctx, network, address)
+	}
+
+	proxyAddr := v.nextProxyAddress()
+	if proxyAddr == "" {
+		return nil, "", errors.New("proxy pool is empty")
+	}
+
+	parsed, err := url.Parse(proxyAddr)
+	if err != nil {
+		return nil, proxyAddr, fmt.Errorf("parse proxy %q: %w", proxyAddr, err)
+	}
+
+	var auth *xproxy.Auth
+	if parsed.User != nil {
+		password, _ := parsed.User.Password()
+		auth = &xproxy.Auth{User: parsed.User.Username(), Password: password}
+	}
+
+	forward := &net.Dialer{Timeout: v.Timeout}
+	dialer, err := xproxy.SOCKS5("tcp", parsed.Host, auth, forward)
+	if err != nil {
+		return nil, proxyAddr, fmt.Errorf("create proxy dialer %q: %w", proxyAddr, err)
+	}
+
+	type dialResult struct {
+		conn net.Conn
+		err  error
+	}
+	done := make(chan dialResult, 1)
+	go func() {
+		conn, err := dialer.Dial(network, address)
+		done <- dialResult{conn: conn, err: err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, proxyAddr, ctx.Err()
+	case result := <-done:
+		if result.err != nil {
+			return nil, proxyAddr, fmt.Errorf("proxy %s dial smtp: %w", proxyAddr, result.err)
+		}
+		return result.conn, proxyAddr, nil
+	}
+}
+
+func (v *EmailVerifier) hasProxyPool() bool {
+	v.proxyMu.Lock()
+	defer v.proxyMu.Unlock()
+	return len(v.proxyPool) > 0
+}
+
+func (v *EmailVerifier) nextProxyAddress() string {
+	v.proxyMu.Lock()
+	defer v.proxyMu.Unlock()
+
+	if len(v.proxyPool) == 0 {
+		return ""
+	}
+	proxyAddr := v.proxyPool[v.nextProxy%len(v.proxyPool)]
+	v.nextProxy = (v.nextProxy + 1) % len(v.proxyPool)
+	return proxyAddr
 }
 
 func classifySMTPErr(err error, fallback string) (string, int, string) {
@@ -480,6 +616,26 @@ func availabilityStatus(connected, attempted bool) string {
 	default:
 		return "unknown"
 	}
+}
+
+func normalizeProxyPool(proxies []string) []string {
+	normalized := make([]string, 0, len(proxies))
+	for _, raw := range proxies {
+		proxyAddr := strings.TrimSpace(raw)
+		if proxyAddr == "" {
+			continue
+		}
+		if !strings.Contains(proxyAddr, "://") {
+			proxyAddr = "socks5://" + proxyAddr
+		}
+		normalized = append(normalized, proxyAddr)
+	}
+	return normalized
+}
+
+func randomControlRecipient(domain, recipient string) string {
+	seed := strings.NewReplacer("@", "-", ".", "-").Replace(recipient)
+	return fmt.Sprintf("verify-control-%d-%s@%s", time.Now().UnixNano(), seed, domain)
 }
 
 func isDisposableDomain(domain string) bool {

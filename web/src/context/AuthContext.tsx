@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
 import type { User } from '../types';
 import { api, DEFAULT_BASE_URL, storageKeys, type ApiConfig } from '../api';
