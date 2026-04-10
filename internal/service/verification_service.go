@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"email-verifier-api/internal/repo"
+	"email-verifier-api/internal/serviceutil"
 	"errors"
 	"fmt"
 	"log"
@@ -155,7 +156,7 @@ func (s *EmailVerificationService) VerifyEmail(ctx context.Context, email string
 		Deterministic:    directResult.Deterministic,
 		ReasonCode:       directResult.ReasonCode,
 		VerificationPath: "direct_smtp",
-		SignalSummary:    summarizeLocalSignals(email, directResult.SignalSummary),
+		SignalSummary:    serviceutil.SummarizeLocalSignals(email, directResult.SignalSummary),
 		ExpiresAt:        now + int64(s.cfg.TransientTTL.Seconds()),
 		CheckCount:       checkCount,
 		Finalized:        true,
@@ -180,8 +181,8 @@ func (s *EmailVerificationService) VerifyEmail(ctx context.Context, email string
 			record.Confidence = "low"
 			record.Deterministic = false
 			record.ReasonCode = "probe_send_failed"
-			record.VerificationPath = probePathForReason(directResult.ReasonCode)
-			record.SignalSummary = summarizeLocalSignals(email, "Direct SMTP was inconclusive and the fallback probe could not be sent.")
+			record.VerificationPath = serviceutil.ProbePathForReason(directResult.ReasonCode)
+			record.SignalSummary = serviceutil.SummarizeLocalSignals(email, "Direct SMTP was inconclusive and the fallback probe could not be sent.")
 			record.ExpiresAt = now + int64(s.cfg.TransientTTL.Seconds())
 			record.Finalized = true
 		} else {
@@ -191,8 +192,8 @@ func (s *EmailVerificationService) VerifyEmail(ctx context.Context, email string
 			record.Confidence = "low"
 			record.Deterministic = false
 			record.ReasonCode = "probe_sent_waiting_bounce"
-			record.VerificationPath = probePathForReason(directResult.ReasonCode)
-			record.SignalSummary = summarizeLocalSignals(email, probeQueuedSummary(record, accountID))
+			record.VerificationPath = serviceutil.ProbePathForReason(directResult.ReasonCode)
+			record.SignalSummary = serviceutil.SummarizeLocalSignals(email, probeQueuedSummary(record, accountID))
 			record.NextCheckAt = time.Now().Add(s.cfg.FirstBounceDelay).Unix()
 			record.ExpiresAt = now + int64(s.cfg.TransientTTL.Seconds())
 			record.Finalized = false
@@ -249,17 +250,17 @@ func (s *EmailVerificationService) VerifyEmailBatch(ctx context.Context, emails 
 }
 
 func (s *EmailVerificationService) CreateSMTPAccount(ctx context.Context, req SMTPAccountCreateRequest, userID string) (*store.SMTPAccount, error) {
-	req.Host = normalizeServerHost(req.Host)
+	req.Host = serviceutil.NormalizeServerHost(req.Host)
 	req.Username = strings.TrimSpace(req.Username)
 	req.Sender = strings.TrimSpace(req.Sender)
-	req.IMAPHost = normalizeServerHost(req.IMAPHost)
+	req.IMAPHost = serviceutil.NormalizeServerHost(req.IMAPHost)
 	req.IMAPMailbox = strings.TrimSpace(req.IMAPMailbox)
 
 	if req.Host == "" || req.Username == "" || req.Password == "" || req.Sender == "" {
 		return nil, errors.New("host, username, password, and sender are required")
 	}
 	if req.IMAPHost == "" {
-		req.IMAPHost = inferIMAPHost(req.Host)
+		req.IMAPHost = serviceutil.InferIMAPHost(req.Host)
 	}
 	if req.Port == 0 {
 		req.Port = 587
@@ -273,16 +274,16 @@ func (s *EmailVerificationService) CreateSMTPAccount(ctx context.Context, req SM
 	if req.DailyLimit <= 0 {
 		req.DailyLimit = 100
 	}
-	if err := validateServerHost("host", req.Host); err != nil {
+	if err := serviceutil.ValidateServerHost("host", req.Host); err != nil {
 		return nil, err
 	}
-	if err := validateServerHost("imap_host", req.IMAPHost); err != nil {
+	if err := serviceutil.ValidateServerHost("imap_host", req.IMAPHost); err != nil {
 		return nil, err
 	}
-	if err := validatePort("port", req.Port); err != nil {
+	if err := serviceutil.ValidatePort("port", req.Port); err != nil {
 		return nil, err
 	}
-	if err := validatePort("imap_port", req.IMAPPort); err != nil {
+	if err := serviceutil.ValidatePort("imap_port", req.IMAPPort); err != nil {
 		return nil, err
 	}
 
@@ -384,17 +385,17 @@ func (s *EmailVerificationService) GetSMTPAccount(ctx context.Context, id string
 }
 
 func (s *EmailVerificationService) UpdateSMTPAccount(ctx context.Context, id string, req SMTPAccountCreateRequest, userID string) (*store.SMTPAccount, error) {
-	req.Host = normalizeServerHost(req.Host)
+	req.Host = serviceutil.NormalizeServerHost(req.Host)
 	req.Username = strings.TrimSpace(req.Username)
 	req.Sender = strings.TrimSpace(req.Sender)
-	req.IMAPHost = normalizeServerHost(req.IMAPHost)
+	req.IMAPHost = serviceutil.NormalizeServerHost(req.IMAPHost)
 	req.IMAPMailbox = strings.TrimSpace(req.IMAPMailbox)
 
 	if req.Host == "" || req.Username == "" || req.Sender == "" {
 		return nil, errors.New("host, username, and sender are required")
 	}
 	if req.IMAPHost == "" {
-		req.IMAPHost = inferIMAPHost(req.Host)
+		req.IMAPHost = serviceutil.InferIMAPHost(req.Host)
 	}
 	if req.Port == 0 {
 		req.Port = 587
@@ -408,16 +409,16 @@ func (s *EmailVerificationService) UpdateSMTPAccount(ctx context.Context, id str
 	if req.DailyLimit <= 0 {
 		req.DailyLimit = 100
 	}
-	if err := validateServerHost("host", req.Host); err != nil {
+	if err := serviceutil.ValidateServerHost("host", req.Host); err != nil {
 		return nil, err
 	}
-	if err := validateServerHost("imap_host", req.IMAPHost); err != nil {
+	if err := serviceutil.ValidateServerHost("imap_host", req.IMAPHost); err != nil {
 		return nil, err
 	}
-	if err := validatePort("port", req.Port); err != nil {
+	if err := serviceutil.ValidatePort("port", req.Port); err != nil {
 		return nil, err
 	}
-	if err := validatePort("imap_port", req.IMAPPort); err != nil {
+	if err := serviceutil.ValidatePort("imap_port", req.IMAPPort); err != nil {
 		return nil, err
 	}
 
@@ -525,9 +526,9 @@ func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store
 		return fmt.Errorf("smtp account not found: %s", rec.SMTPAccountID)
 	}
 
-	imapHost := normalizeServerHost(account.IMAPHost)
+	imapHost := serviceutil.NormalizeServerHost(account.IMAPHost)
 	if imapHost == "" {
-		imapHost = inferIMAPHost(account.Host)
+		imapHost = serviceutil.InferIMAPHost(account.Host)
 	}
 
 	bounced, reason, matchKind, err := s.bounceChecker.HasBounce(ctx, IMAPConfig{
@@ -558,7 +559,7 @@ func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store
 			rec.Deterministic = false
 			rec.ReasonCode = "imap_check_retrying"
 			rec.VerificationPath = ensureProbePath(rec.VerificationPath)
-			rec.SignalSummary = summarizeLocalSignals(rec.Email, "Bounce evidence was unavailable during the first IMAP check, so the verification remains pending.")
+			rec.SignalSummary = serviceutil.SummarizeLocalSignals(rec.Email, "Bounce evidence was unavailable during the first IMAP check, so the verification remains pending.")
 			rec.NextCheckAt = time.Now().Add(s.cfg.SecondBounceDelay).Unix()
 			rec.Finalized = false
 			event = "verify.check.first.error"
@@ -569,7 +570,7 @@ func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store
 			rec.Deterministic = false
 			rec.ReasonCode = "imap_check_failed_final"
 			rec.VerificationPath = ensureProbePath(rec.VerificationPath)
-			rec.SignalSummary = summarizeLocalSignals(rec.Email, "Bounce verification failed across the full check window, so mailbox validity remains unresolved.")
+			rec.SignalSummary = serviceutil.SummarizeLocalSignals(rec.Email, "Bounce verification failed across the full check window, so mailbox validity remains unresolved.")
 			rec.NextCheckAt = 0
 			rec.Finalized = true
 			event = "verify.check.second.error"
@@ -579,9 +580,9 @@ func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store
 		rec.Message = reason
 		rec.Confidence = "high"
 		rec.Deterministic = true
-		rec.ReasonCode = bounceReasonCode(matchKind)
+		rec.ReasonCode = serviceutil.BounceReasonCode(matchKind)
 		rec.VerificationPath = ensureProbePath(rec.VerificationPath)
-		rec.SignalSummary = summarizeLocalSignals(rec.Email, bounceSignalSummary(matchKind))
+		rec.SignalSummary = serviceutil.SummarizeLocalSignals(rec.Email, serviceutil.BounceSignalSummary(matchKind))
 		rec.NextCheckAt = 0
 		rec.ExpiresAt = now + int64(s.cfg.HardResultTTL.Seconds())
 		rec.Finalized = true
@@ -594,7 +595,7 @@ func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store
 			rec.Deterministic = false
 			rec.ReasonCode = "no_bounce_first_window"
 			rec.VerificationPath = ensureProbePath(rec.VerificationPath)
-			rec.SignalSummary = summarizeLocalSignals(rec.Email, "No bounce has been observed in the first check window. The address is marked valid while the second bounce check remains scheduled.")
+			rec.SignalSummary = serviceutil.SummarizeLocalSignals(rec.Email, "No bounce has been observed in the first check window. The address is marked valid while the second bounce check remains scheduled.")
 			rec.NextCheckAt = time.Now().Add(s.cfg.SecondBounceDelay).Unix()
 			rec.Finalized = false
 			event = "verify.check.first.no_bounce"
@@ -605,7 +606,7 @@ func (s *EmailVerificationService) processOneDue(ctx context.Context, rec *store
 			rec.Deterministic = false
 			rec.ReasonCode = "no_bounce_second_window"
 			rec.VerificationPath = ensureProbePath(rec.VerificationPath)
-			rec.SignalSummary = summarizeLocalSignals(rec.Email, "No bounce was observed across both check windows. This remains a heuristic signal rather than confirmed mailbox existence.")
+			rec.SignalSummary = serviceutil.SummarizeLocalSignals(rec.Email, "No bounce was observed across both check windows. This remains a heuristic signal rather than confirmed mailbox existence.")
 			rec.NextCheckAt = 0
 			rec.ExpiresAt = now + int64(s.cfg.ProbeValidTTL.Seconds())
 			rec.Finalized = true
@@ -704,7 +705,7 @@ func (s *EmailVerificationService) SendTestWebhook(ctx context.Context, webhookU
 
 func (s *EmailVerificationService) applyDirectMetadata(rec *store.VerificationRecord, result verifier.VerifyResult) {
 	rec.VerificationPath = "direct_smtp"
-	rec.SignalSummary = summarizeLocalSignals(rec.Email, result.SignalSummary)
+	rec.SignalSummary = serviceutil.SummarizeLocalSignals(rec.Email, result.SignalSummary)
 
 	switch rec.Status {
 	case "invalid":
@@ -730,37 +731,8 @@ func (s *EmailVerificationService) applyDirectMetadata(rec *store.VerificationRe
 	}
 }
 
-func summarizeLocalSignals(email, base string) string {
-	local, domain, _ := strings.Cut(strings.ToLower(email), "@")
-	notes := []string{}
-
-	if isConsumerMailboxDomain(domain) {
-		notes = append(notes, "Consumer mailbox domain.")
-	}
-	if isRoleMailbox(local) {
-		notes = append(notes, "Role-based local part.")
-	}
-
-	if len(notes) == 0 {
-		return base
-	}
-	if base == "" {
-		return strings.Join(notes, " ")
-	}
-	return base + " " + strings.Join(notes, " ")
-}
-
 func probeQueuedSummary(rec *store.VerificationRecord, accountID string) string {
 	return fmt.Sprintf("Direct SMTP evidence was insufficient, so a probe was sent via SMTP account %s and the system is waiting for bounce evidence.", accountID)
-}
-
-func probePathForReason(reasonCode string) string {
-	switch reasonCode {
-	case "direct_path_unavailable":
-		return "probe_bounce"
-	default:
-		return "hybrid"
-	}
 }
 
 func ensureProbePath(path string) string {
@@ -768,44 +740,4 @@ func ensureProbePath(path string) string {
 		return "hybrid"
 	}
 	return path
-}
-
-func bounceReasonCode(matchKind string) string {
-	switch matchKind {
-	case "token_match":
-		return "bounce_token_match"
-	case "recipient_match":
-		return "bounce_recipient_match"
-	default:
-		return "bounce_generic_dsn"
-	}
-}
-
-func bounceSignalSummary(matchKind string) string {
-	switch matchKind {
-	case "token_match":
-		return "Bounce evidence matched the unique probe token."
-	case "recipient_match":
-		return "Bounce evidence matched the recipient address."
-	default:
-		return "Bounce evidence matched a generic delivery-status notification."
-	}
-}
-
-func isConsumerMailboxDomain(domain string) bool {
-	switch strings.ToLower(domain) {
-	case "gmail.com", "googlemail.com", "hotmail.com", "icloud.com", "me.com", "outlook.com", "yahoo.com":
-		return true
-	default:
-		return false
-	}
-}
-
-func isRoleMailbox(local string) bool {
-	switch strings.ToLower(local) {
-	case "admin", "billing", "contact", "hello", "info", "legal", "sales", "support", "team":
-		return true
-	default:
-		return false
-	}
 }

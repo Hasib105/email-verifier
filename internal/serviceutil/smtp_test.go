@@ -1,4 +1,4 @@
-package service
+package serviceutil
 
 import "testing"
 
@@ -19,9 +19,9 @@ func TestValidateServerHost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateServerHost("host", tt.host)
+			err := ValidateServerHost("host", tt.host)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("validateServerHost() error = %v, wantErr = %v", err, tt.wantErr)
+				t.Fatalf("ValidateServerHost() error = %v, wantErr = %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -43,9 +43,9 @@ func TestValidatePort(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validatePort("port", tt.port)
+			err := ValidatePort("port", tt.port)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("validatePort() error = %v, wantErr = %v", err, tt.wantErr)
+				t.Fatalf("ValidatePort() error = %v, wantErr = %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -65,9 +65,9 @@ func TestNormalizeServerHost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := normalizeServerHost(tt.in)
+			got := NormalizeServerHost(tt.in)
 			if got != tt.want {
-				t.Fatalf("normalizeServerHost() = %q, want %q", got, tt.want)
+				t.Fatalf("NormalizeServerHost() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -86,9 +86,9 @@ func TestInferIMAPHost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := inferIMAPHost(tt.in)
+			got := InferIMAPHost(tt.in)
 			if got != tt.want {
-				t.Fatalf("inferIMAPHost() = %q, want %q", got, tt.want)
+				t.Fatalf("InferIMAPHost() = %q, want %q", got, tt.want)
 			}
 		})
 	}

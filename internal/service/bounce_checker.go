@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/tls"
+	"email-verifier-api/internal/serviceutil"
 	"fmt"
 	"io"
 	"strings"
@@ -101,7 +102,7 @@ func (c *IMAPBounceChecker) HasBounce(_ context.Context, cfg IMAPConfig, targetE
 			subject = msg.Envelope.Subject
 		}
 
-		if !containsBounceSignature(text) {
+		if !serviceutil.ContainsBounceSignature(text) {
 			continue
 		}
 
@@ -123,22 +124,4 @@ func (c *IMAPBounceChecker) HasBounce(_ context.Context, cfg IMAPConfig, targetE
 	}
 
 	return false, "", "", nil
-}
-
-func containsBounceSignature(text string) bool {
-	signals := []string{
-		"delivery status notification (failure)",
-		"undeliverable",
-		"mail delivery failed",
-		"final-recipient",
-		"status: 5.",
-		"this is the mail system at host",
-	}
-
-	for _, signal := range signals {
-		if strings.Contains(text, signal) {
-			return true
-		}
-	}
-	return false
 }

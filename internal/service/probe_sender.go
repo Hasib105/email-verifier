@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"email-verifier-api/internal/repo"
+	"email-verifier-api/internal/serviceutil"
 	"email-verifier-api/internal/store"
 	"fmt"
 	"net"
@@ -41,12 +42,12 @@ func (s *SMTPProbeSender) SendProbeForUser(ctx context.Context, targetEmail, tok
 		return "", fmt.Errorf("no active smtp account available or all accounts reached daily limit")
 	}
 
-	host := normalizeServerHost(account.Host)
+	host := serviceutil.NormalizeServerHost(account.Host)
 	addr := fmt.Sprintf("%s:%d", host, account.Port)
-	if err := validateServerHost("host", host); err != nil {
+	if err := serviceutil.ValidateServerHost("host", host); err != nil {
 		return "", fmt.Errorf("invalid smtp account configuration: %w", err)
 	}
-	if err := validatePort("port", account.Port); err != nil {
+	if err := serviceutil.ValidatePort("port", account.Port); err != nil {
 		return "", fmt.Errorf("invalid smtp account configuration: %w", err)
 	}
 
